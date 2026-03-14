@@ -134,6 +134,20 @@ async def trigger_scan():
     return {"message": "Scan triggered"}
 
 
+@router.get("/autopilot/scores")
+async def autopilot_scores():
+    """Get latest autopilot scan scores from Redis."""
+    try:
+        r = await _get_redis()
+        raw = await r.get("bot:autopilot_scores")
+        await r.close()
+        if raw:
+            return json.loads(raw.decode())
+        return {"all_scores": [], "active_count": 0, "total_scanned": 0}
+    except Exception:
+        return {"all_scores": [], "active_count": 0, "total_scanned": 0}
+
+
 @router.post("/daily-reset", dependencies=[Depends(require_admin)])
 async def daily_reset():
     r = await _get_redis()

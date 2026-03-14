@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import structlog
 
 from bot.autopilot.models import MarketScore
@@ -26,13 +28,16 @@ class AutopilotManager:
         ws_client: KrakenWSClient,
         data_mgr: HistoricalDataManager,
         strategy_registry: StrategyRegistry,
+        redis_client=None,
     ) -> None:
         self._broker = broker
         self._ws = ws_client
         self._scanner = MarketScanner(broker)
         self._scorer = MarketScorer(data_mgr)
         self._registry = strategy_registry
+        self._redis = redis_client
         self._active_pairs: dict[str, MarketScore] = {}
+        self._last_all_scores: list[MarketScore] = []
         self.enabled = settings.autopilot_enabled
         self.shadow_mode = settings.autopilot_shadow_mode
         self.max_active = settings.autopilot_max_active
@@ -79,6 +84,12 @@ class AutopilotManager:
             else:
                 self._active_pairs[score.pair] = score
 
+        # Store all scores for dashboard visibility
+        self._last_all_scores = scores
+
+        # Publish scores to Redis for dashboard
+        await self._publish_scores(scores, top)
+
         logger.info(
             "autopilot_cycle_done",
             active=len(self._active_pairs),
@@ -87,6 +98,36 @@ class AutopilotManager:
             ],
         )
         return top
+
+    async def _publish_scores(
+        self, all_scores: list[MarketScore], active: list[MarketScore]
+    ) -> None:
+        """Publish scan results to Redis for the dashboard."""
+        if not self._redis:
+            return
+        try:
+            data = {
+                "all_scores": [
+                    {
+                        "pair": s.pair,
+                        "composite": round(s.composite, 3),
+                        "trend": round(s.trend_score, 3),
+                        "momentum": round(s.momentum_score, 3),
+                        "volatility": round(s.volatility_score, 3),
+                        "alignment": round(s.alignment_score, 3),
+                        "regime": s.regime,
+                        "direction": s.direction_bias,
+                        "strategy": s.recommended_strategy,
+                        "active": s.pair in {a.pair for a in active},
+                    }
+                    for s in all_scores
+                ],
+                "active_count": len(active),
+                "total_scanned": len(all_scores),
+            }
+            await self._redis.set("bot:autopilot_scores", json.dumps(data))
+        except Exception as exc:
+            logger.warning("autopilot_publish_error", error=str(exc))
 
     async def _activate(self, score: MarketScore) -> None:
         strategy_name = select_strategy(score)

@@ -176,6 +176,7 @@ class TradingBot:
                 self.ws_client,
                 self.data_mgr,
                 self.strategy_registry,
+                redis_client=self._redis,
             )
 
         # WebSocket tick callback

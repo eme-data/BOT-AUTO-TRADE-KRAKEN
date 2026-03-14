@@ -111,6 +111,16 @@ export default function Dashboard({ token }: DashboardProps) {
   // AI status
   const [aiStatus, setAiStatus] = useState<AIStatusData | null>(null)
 
+  // Autopilot scores
+  const [autopilotScores, setAutopilotScores] = useState<{
+    all_scores: {
+      pair: string; composite: number; trend: number; momentum: number;
+      volatility: number; alignment: number; regime: string; direction: string;
+      strategy: string; active: boolean
+    }[]
+    active_count: number; total_scanned: number
+  } | null>(null)
+
   // Bot logs
   const [logs, setLogs] = useState<LogEntry[]>([])
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -152,6 +162,11 @@ export default function Dashboard({ token }: DashboardProps) {
         const aiRes = await api.get('/ai/status')
         if (aiRes.data) setAiStatus(aiRes.data)
       } catch { /* ai not available */ }
+
+      try {
+        const apRes = await api.get('/bot/autopilot/scores')
+        if (apRes.data) setAutopilotScores(apRes.data)
+      } catch { /* autopilot not available */ }
     }
     fetchData()
     const interval = setInterval(fetchData, 30000)
@@ -391,6 +406,93 @@ export default function Dashboard({ token }: DashboardProps) {
         </div>
       )}
 
+      {/* Autopilot - Trend Analysis */}
+      {autopilotScores && autopilotScores.all_scores.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-800/30">
+            <div className="flex items-center gap-3">
+              <Activity size={18} className="text-yellow-400" />
+              <div>
+                <h3 className="font-semibold">Analyse des tendances</h3>
+                <p className="text-xs text-gray-500">
+                  {autopilotScores.total_scanned} paires scannees · {autopilotScores.active_count} actives
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => api.post('/bot/autopilot/scan')}
+              className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-xs font-medium transition"
+            >
+              Relancer le scan
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-500 border-b border-gray-800 text-xs">
+                  <th className="text-left px-4 py-2">Paire</th>
+                  <th className="text-center px-2 py-2">Score</th>
+                  <th className="text-center px-2 py-2">Tendance</th>
+                  <th className="text-center px-2 py-2">Momentum</th>
+                  <th className="text-center px-2 py-2">Volatilite</th>
+                  <th className="text-center px-2 py-2">Alignement</th>
+                  <th className="text-center px-2 py-2">Regime</th>
+                  <th className="text-center px-2 py-2">Direction</th>
+                  <th className="text-center px-2 py-2">Strategie</th>
+                  <th className="text-center px-2 py-2">Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {autopilotScores.all_scores.map((s) => (
+                  <tr key={s.pair} className={`border-b border-gray-800/30 ${s.active ? 'bg-yellow-500/5' : ''}`}>
+                    <td className="px-4 py-2 font-mono font-semibold">{s.pair}</td>
+                    <td className="text-center px-2 py-2">
+                      <span className={`font-bold ${
+                        s.composite >= 0.7 ? 'text-green-400' : s.composite >= 0.55 ? 'text-yellow-400' : 'text-gray-500'
+                      }`}>
+                        {(s.composite * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                    <td className="text-center px-2 py-2"><ScoreBar value={s.trend} /></td>
+                    <td className="text-center px-2 py-2"><ScoreBar value={s.momentum} /></td>
+                    <td className="text-center px-2 py-2"><ScoreBar value={s.volatility} /></td>
+                    <td className="text-center px-2 py-2"><ScoreBar value={s.alignment} /></td>
+                    <td className="text-center px-2 py-2">
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        s.regime === 'trending' ? 'bg-green-500/10 text-green-400' :
+                        s.regime === 'volatile' ? 'bg-red-500/10 text-red-400' :
+                        'bg-gray-700 text-gray-400'
+                      }`}>
+                        {s.regime}
+                      </span>
+                    </td>
+                    <td className="text-center px-2 py-2">
+                      <span className={`text-xs font-medium ${
+                        s.direction === 'bullish' ? 'text-green-400' :
+                        s.direction === 'bearish' ? 'text-red-400' :
+                        'text-gray-500'
+                      }`}>
+                        {s.direction === 'bullish' ? 'BULL' : s.direction === 'bearish' ? 'BEAR' : '—'}
+                      </span>
+                    </td>
+                    <td className="text-center px-2 py-2 text-xs text-gray-400">
+                      {s.strategy || '—'}
+                    </td>
+                    <td className="text-center px-2 py-2">
+                      {s.active ? (
+                        <span className="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-400">Active</span>
+                      ) : (
+                        <span className="text-xs text-gray-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Equity curve */}
       {pnlData.length > 0 && (
         <div className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
@@ -523,6 +625,19 @@ function formatLogExtra(log: LogEntry): string {
     parts.push(`${k}=${v}`)
   }
   return parts.join(' ')
+}
+
+function ScoreBar({ value }: { value: number }) {
+  const pct = Math.round(value * 100)
+  const color = pct >= 70 ? 'bg-green-500' : pct >= 45 ? 'bg-yellow-500' : 'bg-gray-600'
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs text-gray-500 w-7">{pct}%</span>
+    </div>
+  )
 }
 
 function StatCard({
