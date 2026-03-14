@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3 } from 'lucide-react'
+import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3, Power } from 'lucide-react'
 
 interface DashboardProps {
   token: string
@@ -121,6 +121,10 @@ export default function Dashboard({ token }: DashboardProps) {
     active_count: number; total_scanned: number
   } | null>(null)
 
+  // Autopilot toggle
+  const [autopilotEnabled, setAutopilotEnabled] = useState(false)
+  const [autopilotToggling, setAutopilotToggling] = useState(false)
+
   // Bot logs
   const [logs, setLogs] = useState<LogEntry[]>([])
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -167,6 +171,18 @@ export default function Dashboard({ token }: DashboardProps) {
         const apRes = await api.get('/bot/autopilot/scores')
         if (apRes.data) setAutopilotScores(apRes.data)
       } catch { /* autopilot not available */ }
+
+      // Load autopilot enabled state from settings
+      try {
+        const settingsRes = await api.get('/settings/')
+        if (settingsRes.data?.autopilot) {
+          const apSetting = settingsRes.data.autopilot.autopilot_enabled
+          if (apSetting) {
+            const val = apSetting.value
+            setAutopilotEnabled(val === true || val === 'true' || val === '1')
+          }
+        }
+      } catch { /* settings not available */ }
     }
     fetchData()
     const interval = setInterval(fetchData, 30000)
@@ -238,6 +254,23 @@ export default function Dashboard({ token }: DashboardProps) {
         closedTrades.length) *
       100
     : 0
+
+  const handleToggleAutopilot = async () => {
+    setAutopilotToggling(true)
+    try {
+      const newVal = !autopilotEnabled
+      await api.put('/settings/', { key: 'autopilot_enabled', value: String(newVal) })
+      setAutopilotEnabled(newVal)
+      // Trigger immediate scan if enabling
+      if (newVal) {
+        await api.post('/bot/autopilot/scan')
+      }
+    } catch {
+      // revert on error
+    } finally {
+      setAutopilotToggling(false)
+    }
+  }
 
   const pnlData = closedTrades
     .slice()
@@ -414,25 +447,43 @@ export default function Dashboard({ token }: DashboardProps) {
       )}
 
       {/* Autopilot - Trend Analysis */}
-      {autopilotScores && autopilotScores.all_scores.length > 0 && (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-800/30">
-            <div className="flex items-center gap-3">
-              <Activity size={18} className="text-yellow-400" />
-              <div>
-                <h3 className="font-semibold">Analyse des tendances</h3>
-                <p className="text-xs text-gray-500">
-                  {autopilotScores.total_scanned} paires scannees · {autopilotScores.active_count} actives
-                </p>
-              </div>
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-800/30">
+          <div className="flex items-center gap-3">
+            <Activity size={18} className="text-yellow-400" />
+            <div>
+              <h3 className="font-semibold">Autopilot – Analyse des tendances</h3>
+              <p className="text-xs text-gray-500">
+                {autopilotScores && autopilotScores.total_scanned > 0
+                  ? `${autopilotScores.total_scanned} paires scannees · ${autopilotScores.active_count} actives`
+                  : 'Aucun scan effectue'}
+              </p>
             </div>
-            <button
-              onClick={() => api.post('/bot/autopilot/scan')}
-              className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-xs font-medium transition"
-            >
-              Relancer le scan
-            </button>
           </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleToggleAutopilot}
+              disabled={autopilotToggling}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition ${
+                autopilotEnabled
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              } disabled:opacity-50`}
+            >
+              <Power size={14} />
+              {autopilotToggling ? '...' : autopilotEnabled ? 'Active' : 'Desactive'}
+            </button>
+            {autopilotEnabled && (
+              <button
+                onClick={() => api.post('/bot/autopilot/scan')}
+                className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-xs font-medium transition"
+              >
+                Relancer le scan
+              </button>
+            )}
+          </div>
+        </div>
+        {autopilotScores && autopilotScores.all_scores.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -497,8 +548,17 @@ export default function Dashboard({ token }: DashboardProps) {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="px-6 py-8 text-center">
+            <Activity size={32} className="text-gray-600 mx-auto mb-3" />
+            <p className="text-gray-500 text-sm">
+              {autopilotEnabled
+                ? 'Scan en cours... Les resultats apparaitront ici.'
+                : 'Activez l\'autopilot pour scanner automatiquement les 40+ paires et detecter les meilleures opportunites.'}
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* Equity curve */}
       {pnlData.length > 0 && (
