@@ -1,3 +1,13 @@
+# ── Stage 1: Build React frontend ─────────────────────
+FROM node:20-alpine AS frontend-build
+
+WORKDIR /frontend
+COPY dashboard/frontend/package.json dashboard/frontend/package-lock.json* ./
+RUN npm install
+COPY dashboard/frontend/ ./
+RUN npm run build
+
+# ── Stage 2: Python API + static files ────────────────
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -15,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements/dashboard.txt
 COPY bot/ bot/
 COPY dashboard/ dashboard/
 COPY .env* ./
+
+# Copy built frontend
+COPY --from=frontend-build /frontend/dist /app/dashboard/frontend/dist
 
 ENV PYTHONUNBUFFERED=1
 
