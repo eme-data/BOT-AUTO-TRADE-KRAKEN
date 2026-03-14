@@ -17,6 +17,7 @@ from bot.ai.models import (
 )
 from bot.ai.prompts import (
     MARKET_REVIEW_PROMPT,
+    POLYMARKET_CONTEXT_TEMPLATE,
     POST_TRADE_PROMPT,
     PRE_TRADE_PROMPT,
     SENTIMENT_PROMPT,
@@ -40,8 +41,9 @@ _PROMPT_MAP = {
 class ClaudeAnalyzer:
     """Sends analysis requests to Claude API and parses structured responses."""
 
-    def __init__(self) -> None:
+    def __init__(self, polymarket_client=None) -> None:
         self._client: httpx.AsyncClient | None = None
+        self._polymarket = polymarket_client
 
     @property
     def is_enabled(self) -> bool:
@@ -90,8 +92,13 @@ class ClaudeAnalyzer:
                 reasoning=f"AI mode '{request.mode.value}' disabled",
             )
 
+        # Fetch Polymarket context if available and mode is PRE_TRADE
+        polymarket_ctx = ""
+        if self._polymarket and request.mode == AnalysisMode.PRE_TRADE:
+            polymarket_ctx = await self._get_polymarket_context(request.pair)
+
         # Build prompt
-        prompt = self._build_prompt(request)
+        prompt = self._build_prompt(request, polymarket_context=polymarket_ctx)
 
         # Call Claude API
         t0 = time.monotonic()
@@ -301,7 +308,7 @@ class ClaudeAnalyzer:
 
     # ── Prompt building ────────────────────────────────
 
-    def _build_prompt(self, request: AIAnalysisRequest) -> str:
+    def _build_prompt(self, request: AIAnalysisRequest, polymarket_context: str = "") -> str:
         template = _PROMPT_MAP.get(request.mode, PRE_TRADE_PROMPT)
 
         indicators_str = self._format_dict(request.indicators)
@@ -312,7 +319,7 @@ class ClaudeAnalyzer:
             else "Aucune position ouverte"
         )
 
-        return template.format(
+        fmt_kwargs = dict(
             pair=request.pair,
             direction=request.signal_direction or "N/A",
             strategy=request.signal_strategy or "N/A",
@@ -322,7 +329,19 @@ class ClaudeAnalyzer:
             positions=positions_str,
             balance=request.account_balance,
             extra_context=request.extra_context,
+            polymarket_context=polymarket_context,
         )
+
+        # Only pass keys that the template expects
+        import string
+        field_names = {
+            fname
+            for _, fname, _, _ in string.Formatter().parse(template)
+            if fname is not None
+        }
+        filtered = {k: v for k, v in fmt_kwargs.items() if k in field_names}
+
+        return template.format(**filtered)
 
     # ── Response parsing ───────────────────────────────
 
@@ -365,6 +384,32 @@ class ClaudeAnalyzer:
                 latency_ms=latency_ms,
                 raw_response=raw,
             )
+
+    # ── Polymarket context ─────────────────────────
+
+    async def _get_polymarket_context(self, pair: str) -> str:
+        """Fetch Polymarket data and format for AI prompt."""
+        try:
+            macro = await self._polymarket.get_macro_sentiment()
+            pair_sentiment = await self._polymarket.get_sentiment_for_pair(pair)
+
+            market_lines = []
+            if pair_sentiment and pair_sentiment.signals:
+                for sig in pair_sentiment.signals[:5]:
+                    market_lines.append(f"- {sig}")
+            if not market_lines:
+                market_lines.append("- Aucun marche predictif pertinent trouve")
+
+            return POLYMARKET_CONTEXT_TEMPLATE.format(
+                macro_score=macro.overall_score,
+                risk_level=macro.risk_level,
+                key_factors=", ".join(macro.key_factors) if macro.key_factors else "N/A",
+                pair=pair,
+                market_list="\n".join(market_lines),
+            )
+        except Exception as exc:
+            logger.debug("polymarket_context_error", pair=pair, error=str(exc))
+            return ""
 
     # ── Mode check ─────────────────────────────────────
 

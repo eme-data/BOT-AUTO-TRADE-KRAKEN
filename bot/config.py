@@ -82,6 +82,10 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "ai_post_trade_enabled": {"label": "Analyse post-trade", "type": "toggle", "default": True},
         "ai_min_confidence": {"label": "Confiance min. pour valider (%)", "type": "number", "default": 0.5},
     },
+    "polymarket": {
+        "polymarket_enabled": {"label": "Enable Polymarket Sentiment", "type": "toggle", "default": False},
+        "polymarket_cache_ttl_minutes": {"label": "Cache TTL (minutes)", "type": "number", "default": 15},
+    },
 }
 
 # Flat set of all DB-manageable keys
@@ -154,6 +158,10 @@ class Settings(BaseSettings):
     ai_sentiment_enabled: bool = False
     ai_post_trade_enabled: bool = True
     ai_min_confidence: float = 0.5
+
+    # ── Polymarket ─────────────────────────────────────
+    polymarket_enabled: bool = False
+    polymarket_cache_ttl_minutes: int = 15
 
     # ── Derived ────────────────────────────────────────
     @property
@@ -247,6 +255,8 @@ class UserSettings:
         "ai_sentiment_enabled": False,
         "ai_post_trade_enabled": True,
         "ai_min_confidence": 0.5,
+        "polymarket_enabled": False,
+        "polymarket_cache_ttl_minutes": 15,
     }
 
     def __init__(self, user_id: int) -> None:

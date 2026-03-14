@@ -30,11 +30,12 @@ class AutopilotManager:
         strategy_registry: StrategyRegistry,
         redis_client=None,
         user_id: int | None = None,
+        polymarket_client=None,
     ) -> None:
         self._broker = broker
         self._ws = ws_client
         self._scanner = MarketScanner(broker)
-        self._scorer = MarketScorer(data_mgr)
+        self._scorer = MarketScorer(data_mgr, polymarket_client=polymarket_client)
         self._registry = strategy_registry
         self._redis = redis_client
         self._user_id = user_id

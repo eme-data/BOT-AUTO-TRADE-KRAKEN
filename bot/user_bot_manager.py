@@ -84,7 +84,20 @@ class UserBotContext:
         self.strategy_registry = StrategyRegistry()
         self.risk_manager = RiskManager()
         self.trailing_stop_mgr = TrailingStopManager()
-        self.ai_analyzer = ClaudeAnalyzer()
+
+        # Polymarket sentiment (optional)
+        self.polymarket_client = None
+        if getattr(self.cfg, "polymarket_enabled", False):
+            try:
+                from bot.data.polymarket import PolymarketClient
+                self.polymarket_client = PolymarketClient(
+                    cache_ttl=getattr(self.cfg, "polymarket_cache_ttl_minutes", 15) * 60,
+                )
+                logger.info("polymarket_enabled", user_id=user_id)
+            except Exception as exc:
+                logger.warning("polymarket_init_error", user_id=user_id, error=str(exc))
+
+        self.ai_analyzer = ClaudeAnalyzer(polymarket_client=self.polymarket_client)
         self.autopilot: AutopilotManager | None = None
 
         self._active_pairs: set[str] = set()
@@ -173,6 +186,7 @@ class UserBotContext:
             self.strategy_registry,
             redis_client=self._redis,
             user_id=self.user_id,
+            polymarket_client=self.polymarket_client,
         )
         self.autopilot.enabled = self.cfg.autopilot_enabled
 

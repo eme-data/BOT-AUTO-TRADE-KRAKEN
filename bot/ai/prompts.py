@@ -15,6 +15,14 @@ Regles strictes :
 - Utilise le francais pour le raisonnement"""
 
 
+POLYMARKET_CONTEXT_TEMPLATE = """## Polymarket – Marches predictifs
+Sentiment global crypto : {macro_score:.0%} ({risk_level})
+Facteurs cles : {key_factors}
+
+Marches pertinents pour {pair} :
+{market_list}
+"""
+
 PRE_TRADE_PROMPT = """Analyse ce signal de trading et donne ton verdict.
 
 ## Signal
@@ -35,6 +43,7 @@ PRE_TRADE_PROMPT = """Analyse ce signal de trading et donne ton verdict.
 ## Solde du compte
 {balance:.2f} USD
 
+{polymarket_context}
 {extra_context}
 
 ## Format de reponse attendu (JSON strict)

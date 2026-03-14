@@ -13,18 +13,26 @@ from bot.data.indicators import add_all_indicators, detect_regime, ema_alignment
 
 logger = structlog.get_logger(__name__)
 
-# Score weights
+# Score weights (without Polymarket)
 W_TREND = 0.35
 W_MOMENTUM = 0.25
 W_VOLATILITY = 0.15
 W_ALIGNMENT = 0.25
 
+# Score weights (with Polymarket sentiment)
+W_TREND_PM = 0.30
+W_MOMENTUM_PM = 0.22
+W_VOLATILITY_PM = 0.13
+W_ALIGNMENT_PM = 0.23
+W_SENTIMENT_PM = 0.12
+
 
 class MarketScorer:
     """Scores market quality using multi-timeframe analysis."""
 
-    def __init__(self, data_mgr: HistoricalDataManager) -> None:
+    def __init__(self, data_mgr: HistoricalDataManager, polymarket_client=None) -> None:
         self._data = data_mgr
+        self._polymarket = polymarket_client
         self._cache: dict[str, MarketScore] = {}
         self._cache_ttl = 1800  # 30 minutes
 
@@ -54,13 +62,23 @@ class MarketScorer:
         momentum = self._momentum_score(df_h1)
         volatility = self._volatility_score(df_h1)
         alignment = self._alignment_score(df_h1, df_d1)
+        sentiment = await self._sentiment_score(pair)
 
-        composite = (
-            W_TREND * trend
-            + W_MOMENTUM * momentum
-            + W_VOLATILITY * volatility
-            + W_ALIGNMENT * alignment
-        )
+        if self._polymarket and sentiment != 0.5:
+            composite = (
+                W_TREND_PM * trend
+                + W_MOMENTUM_PM * momentum
+                + W_VOLATILITY_PM * volatility
+                + W_ALIGNMENT_PM * alignment
+                + W_SENTIMENT_PM * sentiment
+            )
+        else:
+            composite = (
+                W_TREND * trend
+                + W_MOMENTUM * momentum
+                + W_VOLATILITY * volatility
+                + W_ALIGNMENT * alignment
+            )
 
         regime = detect_regime(df_h1)
         direction = ema_alignment(df_h1)
@@ -71,6 +89,7 @@ class MarketScorer:
             momentum_score=momentum,
             volatility_score=volatility,
             alignment_score=alignment,
+            sentiment_score=sentiment,
             composite=composite,
             regime=regime,
             direction_bias=direction,
@@ -148,3 +167,21 @@ class MarketScorer:
             return 0.3
         else:
             return 0.1  # conflicting timeframes
+
+    async def _sentiment_score(self, pair: str) -> float:
+        """Get Polymarket sentiment score for a pair (0-1, 0.5=neutral)."""
+        if not self._polymarket:
+            return 0.5
+        try:
+            sentiment = await self._polymarket.get_sentiment_for_pair(pair)
+            if sentiment is None:
+                return 0.5
+            # bullish_probability is already 0-1, use it directly
+            # Weight by confidence (based on market count/volume)
+            raw = sentiment.bullish_probability
+            confidence = sentiment.confidence
+            # Blend towards neutral (0.5) when confidence is low
+            return 0.5 + (raw - 0.5) * confidence
+        except Exception as exc:
+            logger.warning("polymarket_score_error", pair=pair, error=str(exc))
+            return 0.5

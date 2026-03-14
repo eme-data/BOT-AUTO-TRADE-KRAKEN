@@ -13,6 +13,7 @@ class MarketScore:
     momentum_score: float = 0.0   # 0-1
     volatility_score: float = 0.0 # 0-1
     alignment_score: float = 0.0  # 0-1
+    sentiment_score: float = 0.5  # 0-1 (Polymarket, 0.5 = neutral)
     composite: float = 0.0        # weighted average
     regime: str = "ranging"       # trending / ranging / volatile
     direction_bias: str = "neutral"  # bullish / bearish / neutral

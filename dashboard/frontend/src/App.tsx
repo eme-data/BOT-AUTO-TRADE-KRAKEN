@@ -15,6 +15,7 @@ import AuditLog from './pages/AuditLog'
 import Health from './pages/Health'
 import Strategies from './pages/Strategies'
 import StrategyComparison from './pages/StrategyComparison'
+import Polymarket from './pages/Polymarket'
 import Layout from './components/Layout'
 
 function decodeJwt(token: string): Record<string, unknown> | null {
@@ -107,6 +108,7 @@ export default function App() {
         <Route path="/compare" element={<StrategyComparison token={token} />} />
         <Route path="/journal" element={<Journal token={token} />} />
         <Route path="/strategies" element={<Strategies token={token} />} />
+        <Route path="/polymarket" element={<Polymarket token={token} />} />
         <Route path="/settings" element={<Settings token={token} />} />
         <Route path="/ai" element={<AIAnalysis token={token} />} />
         <Route path="/logs" element={<BotLogs token={token} />} />
