@@ -216,13 +216,19 @@ class TradingBot:
         logger.info("bot_started", pairs=list(self._active_pairs), mode=mode)
         await self._publish_log("INFO", "bot_started", mode=mode, pairs=str(list(self._active_pairs)))
 
-        # Start background tasks
-        await asyncio.gather(
+        # Start background tasks (return_exceptions prevents one crash from killing all)
+        results = await asyncio.gather(
             self._bar_update_loop(),
             self._account_metrics_loop(),
             self._autopilot_loop(),
             self._redis_command_listener(),
+            return_exceptions=True,
         )
+        # Log any crashed tasks
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener"]
+        for name, result in zip(task_names, results):
+            if isinstance(result, Exception):
+                logger.error("background_task_crashed", task=name, error=str(result))
 
     async def stop(self) -> None:
         logger.info("bot_stopping")
@@ -645,7 +651,10 @@ class TradingBot:
                         await self._process_signal(signal)
                 except Exception as exc:
                     logger.error("bar_update_error", pair=pair, error=str(exc))
-                    await self._publish_log("ERROR", "bar_update_error", pair=pair, error=str(exc))
+                    try:
+                        await self._publish_log("ERROR", "bar_update_error", pair=pair, error=str(exc))
+                    except Exception:
+                        pass
 
     async def _account_metrics_loop(self) -> None:
         """Update account metrics every minute."""
@@ -699,9 +708,18 @@ class TradingBot:
                 logger.error("metrics_error", error=str(exc))
 
     async def _autopilot_loop(self) -> None:
-        """Run autopilot scan cycle periodically."""
+        """Run autopilot scan cycle periodically. Auto-restarts on crash."""
         if not self.autopilot:
             return
+        while self._running:
+            try:
+                await self._autopilot_loop_inner()
+            except Exception as exc:
+                logger.error("autopilot_loop_crashed", error=str(exc), msg="Restarting in 30s")
+                await asyncio.sleep(30)
+
+    async def _autopilot_loop_inner(self) -> None:
+        """Inner autopilot loop."""
         # Run first scan shortly after startup
         first_run = True
         while self._running:
@@ -744,7 +762,10 @@ class TradingBot:
                     )
             except Exception as exc:
                 logger.error("autopilot_error", error=str(exc))
-                await self._publish_log("ERROR", "autopilot_error", error=str(exc))
+                try:
+                    await self._publish_log("ERROR", "autopilot_error", error=str(exc))
+                except Exception:
+                    pass  # Don't let log publishing crash the loop
 
     async def _redis_command_listener(self) -> None:
         """Listen for commands on Redis pub/sub."""
