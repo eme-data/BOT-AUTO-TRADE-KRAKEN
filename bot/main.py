@@ -126,12 +126,15 @@ class TradingBot:
         self.risk_manager.max_per_pair = settings.bot_max_per_pair
         self.risk_manager.risk_per_trade_pct = settings.bot_risk_per_trade_pct
 
-        # Re-apply autopilot settings
+        # Re-apply autopilot settings (autopilot is always created)
         if self.autopilot:
+            was_enabled = self.autopilot.enabled
             self.autopilot.enabled = settings.autopilot_enabled
             self.autopilot.shadow_mode = settings.autopilot_shadow_mode
             self.autopilot.max_active = settings.autopilot_max_active
             self.autopilot.min_score = settings.autopilot_min_score
+            if not was_enabled and settings.autopilot_enabled:
+                logger.info("autopilot_enabled_via_settings")
 
         logger.info("settings_reloaded")
 
@@ -169,15 +172,15 @@ class TradingBot:
         # Strategies
         self.strategy_registry.load_defaults()
 
-        # Autopilot
-        if settings.autopilot_enabled:
-            self.autopilot = AutopilotManager(
-                self.broker,
-                self.ws_client,
-                self.data_mgr,
-                self.strategy_registry,
-                redis_client=self._redis,
-            )
+        # Autopilot – always create so it can be enabled via dashboard
+        self.autopilot = AutopilotManager(
+            self.broker,
+            self.ws_client,
+            self.data_mgr,
+            self.strategy_registry,
+            redis_client=self._redis,
+        )
+        self.autopilot.enabled = settings.autopilot_enabled
 
         # WebSocket tick callback
         self.ws_client.set_tick_callback(self._on_tick)
@@ -699,19 +702,25 @@ class TradingBot:
         """Run autopilot scan cycle periodically."""
         if not self.autopilot:
             return
-        interval = settings.autopilot_scan_interval_minutes * 60
-        # Run first scan immediately at startup
+        # Run first scan shortly after startup
         first_run = True
         while self._running:
             if first_run:
                 first_run = False
-                await asyncio.sleep(10)  # Small delay for warmup
+                await asyncio.sleep(15)  # Small delay for warmup
             else:
+                interval = settings.autopilot_scan_interval_minutes * 60
                 await asyncio.sleep(interval)
             if not settings.is_configured:
                 continue
+            if not self.autopilot.enabled:
+                continue
             try:
                 await self.autopilot.run_scan_cycle()
+                await self._publish_log(
+                    "INFO", "autopilot_scan_done",
+                    active=str(len(self.autopilot.active_scores)),
+                )
             except Exception as exc:
                 logger.error("autopilot_error", error=str(exc))
 
