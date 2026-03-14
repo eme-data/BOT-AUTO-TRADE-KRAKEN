@@ -65,9 +65,19 @@ async def tradeable_pairs():
 async def crypto_prices():
     """Get real-time prices for major crypto pairs."""
     target_pairs = [
-        "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD",
-        "ADA/USD", "DOT/USD", "AVAX/USD", "LINK/USD",
-        "MATIC/USD", "ATOM/USD",
+        # Top caps
+        "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD",
+        "DOT/USD", "AVAX/USD", "LINK/USD", "ATOM/USD", "LTC/USD",
+        # Meme coins
+        "DOGE/USD", "SHIB/USD", "PEPE/USD", "FLOKI/USD", "BONK/USD",
+        # DeFi / Layer 2
+        "UNI/USD", "AAVE/USD", "MKR/USD", "CRV/USD", "LDO/USD",
+        "ARB/USD", "OP/USD", "MATIC/USD", "IMX/USD",
+        # Ecosystems
+        "NEAR/USD", "APT/USD", "SUI/USD", "SEI/USD", "INJ/USD",
+        "FIL/USD", "RENDER/USD", "FET/USD", "GRT/USD",
+        # Others
+        "BCH/USD", "ALGO/USD", "XLM/USD", "VET/USD",
     ]
 
     broker = await _get_connected_broker()

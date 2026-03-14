@@ -700,8 +700,14 @@ class TradingBot:
         if not self.autopilot:
             return
         interval = settings.autopilot_scan_interval_minutes * 60
+        # Run first scan immediately at startup
+        first_run = True
         while self._running:
-            await asyncio.sleep(interval)
+            if first_run:
+                first_run = False
+                await asyncio.sleep(10)  # Small delay for warmup
+            else:
+                await asyncio.sleep(interval)
             if not settings.is_configured:
                 continue
             try:

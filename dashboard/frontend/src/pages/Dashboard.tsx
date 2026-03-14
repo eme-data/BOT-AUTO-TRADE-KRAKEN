@@ -375,33 +375,40 @@ export default function Dashboard({ token }: DashboardProps) {
         )}
       </div>
 
-      {/* Crypto Prices */}
+      {/* Crypto Prices – horizontal scrolling ticker */}
       {prices.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
           <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-800 bg-gray-800/30">
             <BarChart3 size={18} className="text-blue-400" />
             <h3 className="font-semibold">Marche Crypto</h3>
-            <span className="text-xs text-gray-500 ml-auto">Prix en temps reel</span>
+            <span className="text-xs text-gray-500 ml-auto">{prices.length} paires · Prix en temps reel</span>
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-0">
-            {prices.map((p) => {
-              const symbol = p.pair.replace('/USD', '')
-              return (
-                <div key={p.pair} className="px-4 py-3 border-b border-r border-gray-800/50 hover:bg-gray-800/30 transition">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono font-semibold text-sm">{symbol}</span>
-                    <span className="text-xs text-gray-600">USD</span>
+          <div className="relative overflow-hidden">
+            <div className="flex animate-marquee hover:[animation-play-state:paused] gap-0">
+              {[...prices, ...prices].map((p, idx) => {
+                const symbol = p.pair.replace('/USD', '')
+                return (
+                  <div
+                    key={`${p.pair}-${idx}`}
+                    className="flex-shrink-0 w-48 px-4 py-3 border-r border-gray-800/50 hover:bg-gray-800/30 transition"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono font-semibold text-sm">{symbol}</span>
+                      <span className="text-xs text-gray-600">USD</span>
+                    </div>
+                    <p className="text-lg font-bold font-mono">
+                      {p.last >= 1
+                        ? `$${p.last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : `$${p.last.toFixed(6)}`}
+                    </p>
+                    <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
+                      <span>Spread: {p.spread < 0.01 ? p.spread.toFixed(6) : `$${p.spread.toFixed(2)}`}</span>
+                      <span>Vol: {p.volume >= 1_000_000 ? `${(p.volume / 1_000_000).toFixed(1)}M` : p.volume >= 1000 ? `${(p.volume / 1000).toFixed(1)}K` : p.volume.toFixed(1)}</span>
+                    </div>
                   </div>
-                  <p className="text-lg font-bold font-mono">
-                    {p.last >= 1 ? `$${p.last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `$${p.last.toFixed(4)}`}
-                  </p>
-                  <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
-                    <span>Spread: ${p.spread < 1 ? p.spread.toFixed(4) : p.spread.toFixed(2)}</span>
-                    <span>Vol: {p.volume >= 1000 ? `${(p.volume / 1000).toFixed(1)}K` : p.volume.toFixed(1)}</span>
-                  </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
         </div>
       )}

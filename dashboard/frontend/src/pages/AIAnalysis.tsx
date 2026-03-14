@@ -231,7 +231,7 @@ export default function AIAnalysis({ token }: { token: string }) {
             onChange={(e) => setAnalysisPair(e.target.value)}
             className="px-3 py-2 bg-gray-800 rounded-lg border border-gray-700 text-sm focus:border-blue-500 focus:outline-none"
           >
-            {['BTC/USD', 'ETH/USD', 'SOL/USD', 'ADA/USD', 'DOT/USD', 'AVAX/USD', 'LINK/USD', 'XRP/USD'].map(
+            {['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'ADA/USD', 'DOT/USD', 'AVAX/USD', 'LINK/USD', 'DOGE/USD', 'SHIB/USD', 'PEPE/USD', 'ATOM/USD', 'UNI/USD', 'NEAR/USD', 'ARB/USD', 'OP/USD'].map(
               (p) => (
                 <option key={p} value={p}>
                   {p}

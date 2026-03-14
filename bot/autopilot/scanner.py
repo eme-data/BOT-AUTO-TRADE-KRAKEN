@@ -11,11 +11,22 @@ logger = structlog.get_logger(__name__)
 
 # Default pairs to scan when in discovery mode
 DEFAULT_DISCOVERY_PAIRS: list[str] = [
-    "BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD", "DOT/USD",
-    "AVAX/USD", "LINK/USD", "MATIC/USD", "UNI/USD", "ATOM/USD",
-    "XRP/USD", "DOGE/USD", "LTC/USD", "BCH/USD", "ALGO/USD",
-    "FIL/USD", "AAVE/USD", "MKR/USD", "NEAR/USD", "APT/USD",
-    "BTC/EUR", "ETH/EUR", "SOL/EUR",
+    # ── Top caps ──────────────────────────────
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD",
+    "DOT/USD", "AVAX/USD", "LINK/USD", "ATOM/USD", "LTC/USD",
+    # ── Meme coins ────────────────────────────
+    "DOGE/USD", "SHIB/USD", "PEPE/USD", "FLOKI/USD", "BONK/USD",
+    # ── DeFi / Layer 2 ───────────────────────
+    "UNI/USD", "AAVE/USD", "MKR/USD", "CRV/USD", "LDO/USD",
+    "ARB/USD", "OP/USD", "MATIC/USD", "IMX/USD",
+    # ── Ecosystemes ──────────────────────────
+    "NEAR/USD", "APT/USD", "SUI/USD", "SEI/USD", "INJ/USD",
+    "FIL/USD", "RENDER/USD", "FET/USD", "GRT/USD",
+    # ── Autres altcoins ──────────────────────
+    "BCH/USD", "ALGO/USD", "XLM/USD", "VET/USD", "SAND/USD",
+    "MANA/USD", "ENS/USD", "COMP/USD",
+    # ── EUR variants ─────────────────────────
+    "BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR",
 ]
 
 # Quote currencies we trade against
