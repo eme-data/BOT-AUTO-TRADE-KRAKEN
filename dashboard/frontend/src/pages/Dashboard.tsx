@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useWebSocket } from '../hooks/useWebSocket'
 import {
@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet } from 'lucide-react'
+import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal } from 'lucide-react'
 
 interface DashboardProps {
   token: string
@@ -28,6 +28,13 @@ interface Trade {
   profit: number | null
   status: string
   opened_at: string
+}
+
+interface LogEntry {
+  timestamp: string
+  level: string
+  event: string
+  [key: string]: unknown
 }
 
 interface WsStatusMessage {
@@ -55,9 +62,17 @@ interface WsTradeClosedMessage {
 
 type WsMessage = WsStatusMessage | WsTradeOpenedMessage | WsTradeClosedMessage
 
+const LOG_LEVEL_COLORS: Record<string, string> = {
+  DEBUG: 'text-gray-500',
+  INFO: 'text-blue-400',
+  WARNING: 'text-yellow-400',
+  ERROR: 'text-red-400',
+}
+
 export default function Dashboard({ token }: DashboardProps) {
   const api = useApi(token)
-  const { lastMessage, connected } = useWebSocket('/ws/dashboard')
+  const { lastMessage: dashMsg, connected } = useWebSocket('/ws/dashboard')
+  const { lastMessage: logMsg } = useWebSocket('/ws/logs')
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
@@ -73,43 +88,70 @@ export default function Dashboard({ token }: DashboardProps) {
     open_positions: number
     positions: { pair: string; direction: string; size: number; entry_price: number; unrealized_pnl: number }[]
   } | null>(null)
+  const [balanceError, setBalanceError] = useState<string | null>(null)
+
+  // Bot logs
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const logEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statusRes, tradesRes, balanceRes] = await Promise.all([
+        const [statusRes, tradesRes] = await Promise.all([
           api.get('/bot/status'),
           api.get('/trades/?limit=20'),
-          api.get('/bot/balance'),
         ])
         setBotStatus(statusRes.data)
         setTrades(tradesRes.data)
-        if (balanceRes.data && !balanceRes.data.error) {
-          setKrakenBalance(balanceRes.data)
-        }
       } catch {
         // handle error
       } finally {
         setLoading(false)
       }
+
+      // Fetch balance separately so it doesn't block the rest
+      try {
+        const balanceRes = await api.get('/bot/balance')
+        if (balanceRes.data && !balanceRes.data.error) {
+          setKrakenBalance(balanceRes.data)
+          setBalanceError(null)
+        } else if (balanceRes.data?.error) {
+          setBalanceError(balanceRes.data.error)
+        }
+      } catch {
+        setBalanceError('Impossible de recuperer le solde')
+      }
     }
     fetchData()
-    const interval = setInterval(fetchData, 30000) // refresh every 30s
+    const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
   }, [token])
 
-  // Handle incoming WebSocket messages
+  // Load log history
   useEffect(() => {
-    if (!lastMessage) return
+    const loadLogs = async () => {
+      try {
+        const res = await api.get('/bot/logs?limit=50')
+        if (Array.isArray(res.data)) {
+          setLogs(res.data.reverse())
+        }
+      } catch {
+        // logs might not be available yet
+      }
+    }
+    loadLogs()
+  }, [token])
 
-    const msg = lastMessage as WsMessage
-
+  // Handle dashboard WebSocket messages
+  useEffect(() => {
+    if (!dashMsg) return
+    const msg = dashMsg as WsMessage
     if (msg.type === 'status') {
       setLivePnl(msg.pnl)
       setLivePositions(msg.positions)
     } else if (msg.type === 'trade_opened') {
       const newTrade: Trade = {
-        id: Date.now(), // temporary ID for display
+        id: Date.now(),
         pair: msg.pair,
         direction: msg.direction,
         profit: null,
@@ -126,7 +168,21 @@ export default function Dashboard({ token }: DashboardProps) {
         ),
       )
     }
-  }, [lastMessage])
+  }, [dashMsg])
+
+  // Handle log WebSocket messages
+  useEffect(() => {
+    if (!logMsg) return
+    const entry = logMsg as LogEntry
+    if (entry.event && entry.event !== 'heartbeat' && entry.level) {
+      setLogs((prev) => [...prev.slice(-99), entry])
+    }
+  }, [logMsg])
+
+  // Auto-scroll logs
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs])
 
   const closedTrades = trades.filter((t) => t.status === 'CLOSED')
   const openTrades = trades.filter((t) => t.status === 'OPEN')
@@ -198,53 +254,59 @@ export default function Dashboard({ token }: DashboardProps) {
       </div>
 
       {/* Kraken Account Balance */}
-      {krakenBalance && (
-        <div className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="inline-flex p-2 rounded-lg bg-blue-500/10 text-blue-400">
-              <Wallet size={20} />
-            </div>
-            <div>
-              <h3 className="font-semibold">Compte Kraken</h3>
-              <p className="text-xs text-gray-500">Solde en temps reel</p>
-            </div>
+      <div className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="inline-flex p-2 rounded-lg bg-blue-500/10 text-blue-400">
+            <Wallet size={20} />
           </div>
-          <div className="grid grid-cols-3 gap-4 mb-4">
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Solde total</p>
-              <p className="text-2xl font-bold font-mono">${krakenBalance.total_balance.toFixed(2)}</p>
-            </div>
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Disponible</p>
-              <p className="text-lg font-bold font-mono text-green-400">${krakenBalance.available_balance.toFixed(2)}</p>
-            </div>
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Positions ouvertes</p>
-              <p className="text-lg font-bold">{krakenBalance.open_positions}</p>
-            </div>
+          <div>
+            <h3 className="font-semibold">Compte Kraken</h3>
+            <p className="text-xs text-gray-500">Solde en temps reel</p>
           </div>
-          {krakenBalance.positions.length > 0 && (
-            <div className="border-t border-gray-800 pt-3">
-              <p className="text-xs text-gray-500 mb-2">Positions actives</p>
-              <div className="space-y-2">
-                {krakenBalance.positions.map((p, i) => (
-                  <div key={i} className="flex items-center justify-between text-sm bg-gray-800/50 rounded-lg px-3 py-2">
-                    <span className="font-mono">{p.pair}</span>
-                    <span className={p.direction === 'buy' ? 'text-green-400' : 'text-red-400'}>
-                      {p.direction.toUpperCase()}
-                    </span>
-                    <span className="text-gray-400">Size: {p.size}</span>
-                    <span className="text-gray-400">Entry: ${p.entry_price.toFixed(2)}</span>
-                    <span className={p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                      {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} $
-                    </span>
-                  </div>
-                ))}
+        </div>
+        {krakenBalance ? (
+          <>
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div>
+                <p className="text-gray-500 text-xs mb-1">Solde total</p>
+                <p className="text-2xl font-bold font-mono">${krakenBalance.total_balance.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-gray-500 text-xs mb-1">Disponible</p>
+                <p className="text-lg font-bold font-mono text-green-400">${krakenBalance.available_balance.toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-gray-500 text-xs mb-1">Positions ouvertes</p>
+                <p className="text-lg font-bold">{krakenBalance.open_positions}</p>
               </div>
             </div>
-          )}
-        </div>
-      )}
+            {krakenBalance.positions.length > 0 && (
+              <div className="border-t border-gray-800 pt-3">
+                <p className="text-xs text-gray-500 mb-2">Positions actives</p>
+                <div className="space-y-2">
+                  {krakenBalance.positions.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm bg-gray-800/50 rounded-lg px-3 py-2">
+                      <span className="font-mono">{p.pair}</span>
+                      <span className={p.direction === 'buy' ? 'text-green-400' : 'text-red-400'}>
+                        {p.direction.toUpperCase()}
+                      </span>
+                      <span className="text-gray-400">Size: {p.size}</span>
+                      <span className="text-gray-400">Entry: ${p.entry_price.toFixed(2)}</span>
+                      <span className={p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} $
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-gray-500 text-sm">
+            {balanceError || 'Chargement du solde...'}
+          </p>
+        )}
+      </div>
 
       {/* Equity curve */}
       {pnlData.length > 0 && (
@@ -275,7 +337,7 @@ export default function Dashboard({ token }: DashboardProps) {
       )}
 
       {/* Recent trades */}
-      <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+      <div className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
         <h3 className="text-lg font-semibold mb-4">Recent Trades</h3>
         <table className="w-full text-sm">
           <thead>
@@ -287,39 +349,97 @@ export default function Dashboard({ token }: DashboardProps) {
             </tr>
           </thead>
           <tbody>
-            {trades.slice(0, 10).map((t) => (
-              <tr key={t.id} className="border-b border-gray-800/50">
-                <td className="py-2 font-mono">{t.pair}</td>
-                <td className="py-2">
-                  <span
-                    className={
-                      t.direction === 'buy' ? 'text-green-400' : 'text-red-400'
-                    }
-                  >
-                    {t.direction.toUpperCase()}
-                  </span>
-                </td>
-                <td className="py-2 text-gray-400">{t.status}</td>
-                <td className="py-2 text-right font-mono">
-                  {t.profit != null ? (
+            {trades.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-4 text-center text-gray-500">Aucun trade</td>
+              </tr>
+            ) : (
+              trades.slice(0, 10).map((t) => (
+                <tr key={t.id} className="border-b border-gray-800/50">
+                  <td className="py-2 font-mono">{t.pair}</td>
+                  <td className="py-2">
                     <span
                       className={
-                        t.profit >= 0 ? 'text-green-400' : 'text-red-400'
+                        t.direction === 'buy' ? 'text-green-400' : 'text-red-400'
                       }
                     >
-                      ${t.profit.toFixed(2)}
+                      {t.direction.toUpperCase()}
                     </span>
-                  ) : (
-                    '–'
-                  )}
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="py-2 text-gray-400">{t.status}</td>
+                  <td className="py-2 text-right font-mono">
+                    {t.profit != null ? (
+                      <span
+                        className={
+                          t.profit >= 0 ? 'text-green-400' : 'text-red-400'
+                        }
+                      >
+                        ${t.profit.toFixed(2)}
+                      </span>
+                    ) : (
+                      '–'
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
+
+      {/* Bot Logs */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-800 bg-gray-800/30">
+          <Terminal size={18} className="text-green-400" />
+          <h3 className="font-semibold">Bot Logs</h3>
+          <span className="text-xs text-gray-500 ml-auto">{logs.length} entries</span>
+        </div>
+        <div className="h-64 overflow-auto font-mono text-xs p-4 bg-gray-950">
+          {logs.length === 0 ? (
+            <p className="text-gray-600 text-center py-8">
+              En attente des logs du bot...
+            </p>
+          ) : (
+            logs.map((log, i) => (
+              <div key={i} className="flex gap-2 py-0.5 hover:bg-gray-900/50">
+                <span className="text-gray-600 whitespace-nowrap">
+                  {formatLogTime(log.timestamp)}
+                </span>
+                <span className={`w-12 text-right shrink-0 ${LOG_LEVEL_COLORS[log.level] || 'text-gray-400'}`}>
+                  {log.level}
+                </span>
+                <span className="text-purple-400 font-semibold shrink-0">{log.event}</span>
+                <span className="text-gray-400 truncate">{formatLogExtra(log)}</span>
+              </div>
+            ))
+          )}
+          <div ref={logEndRef} />
+        </div>
+      </div>
     </div>
   )
+}
+
+function formatLogTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString('fr-FR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  } catch {
+    return iso
+  }
+}
+
+function formatLogExtra(log: LogEntry): string {
+  const skip = new Set(['timestamp', 'level', 'event', 'type'])
+  const parts: string[] = []
+  for (const [k, v] of Object.entries(log)) {
+    if (skip.has(k)) continue
+    parts.push(`${k}=${v}`)
+  }
+  return parts.join(' ')
 }
 
 function StatCard({
