@@ -1,0 +1,60 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Node
+node_modules/
+dashboard/frontend/dist/
+dashboard/frontend/build/
+
+# Docker
+docker-compose.override.yml
+
+# Certificates
+nginx/certs/
+certbot/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Secrets
+*.pem
+*.key
+credentials.json

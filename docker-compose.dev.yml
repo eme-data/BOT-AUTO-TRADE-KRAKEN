@@ -1,0 +1,24 @@
+version: "3.9"
+
+# Development overrides – mount source code, enable hot-reload
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    volumes:
+      - ./bot:/app/bot
+      - ./.env:/app/.env
+    environment:
+      LOG_LEVEL: DEBUG
+    command: ["python", "-m", "bot"]
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    volumes:
+      - ./bot:/app/bot
+      - ./dashboard:/app/dashboard
+      - ./.env:/app/.env
+    command: ["uvicorn", "dashboard.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

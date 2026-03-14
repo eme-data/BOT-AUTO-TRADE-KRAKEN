@@ -1,0 +1,34 @@
+groups:
+  - name: kraken_bot_alerts
+    rules:
+      - alert: BotDown
+        expr: up{job="kraken-bot"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading bot is down"
+
+      - alert: HighDailyLoss
+        expr: kraken_daily_pnl_usd < -300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Daily P&L below -$300"
+
+      - alert: NoTicksReceived
+        expr: rate(kraken_ticks_received_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ticks received in 5 minutes"
+
+      - alert: HighOrderRejectionRate
+        expr: rate(kraken_orders_rejected_total[10m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High order rejection rate"

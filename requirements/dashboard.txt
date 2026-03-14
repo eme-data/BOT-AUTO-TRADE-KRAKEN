@@ -1,0 +1,6 @@
+-r base.txt
+fastapi>=0.109
+uvicorn[standard]>=0.27
+python-jose[cryptography]>=3.3
+python-multipart>=0.0.6
+passlib[bcrypt]>=1.7
