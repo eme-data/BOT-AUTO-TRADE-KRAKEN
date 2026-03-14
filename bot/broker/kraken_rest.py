@@ -11,6 +11,8 @@ import ccxt.async_support as ccxt
 import structlog
 
 from bot.broker.base import AbstractBroker
+from bot.broker.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from bot.broker.rate_limiter import KrakenRateLimiter
 from bot.broker.models import (
     AccountBalance,
     Direction,
@@ -38,16 +40,46 @@ _INTERVAL_MAP: dict[int, str] = {
 }
 
 
+_PUBLIC_ENDPOINTS = {"get_ticker", "get_historical_prices", "get_tradeable_pairs"}
+_ORDER_ENDPOINTS = {"open_position", "close_position"}
+
+
 def _auto_retry(max_retries: int = 3, delay: float = 5.0):
-    """Retry on transient exchange errors."""
+    """Retry on transient exchange errors with circuit-breaker integration."""
 
     def decorator(fn):
         @wraps(fn)
         async def wrapper(*args, **kwargs):
+            # args[0] is ``self`` (KrakenRestClient instance)
+            client: KrakenRestClient | None = None
+            if args and isinstance(args[0], KrakenRestClient):
+                client = args[0]
+
+            operation = fn.__name__
+
+            # ── Rate limiting ──
+            if client is not None:
+                if operation in _ORDER_ENDPOINTS:
+                    # Order endpoints use the matching engine limiter
+                    await client.matching_limiter.acquire(cost=1)
+                elif operation in _PUBLIC_ENDPOINTS:
+                    await client.rate_limiter.acquire(cost=1)
+                else:
+                    # Private non-order endpoints cost 2
+                    await client.rate_limiter.acquire(cost=2)
+
+            # ── Check circuit breaker before attempting ──
+            if client is not None:
+                await client.circuit_breaker.pre_call(operation)
+
             last_err: Exception | None = None
             for attempt in range(1, max_retries + 1):
                 try:
-                    return await fn(*args, **kwargs)
+                    result = await fn(*args, **kwargs)
+                    # Success → record and return
+                    if client is not None:
+                        await client.circuit_breaker.record_success(operation)
+                    return result
                 except (
                     ccxt.NetworkError,
                     ccxt.ExchangeNotAvailable,
@@ -66,6 +98,10 @@ def _auto_retry(max_retries: int = 3, delay: float = 5.0):
                     last_err = exc
                     logger.error("kraken_rate_limit", fn=fn.__name__)
                     await asyncio.sleep(delay * 2)
+
+            # All retries exhausted → record failure in circuit breaker
+            if client is not None:
+                await client.circuit_breaker.record_failure(operation)
             raise last_err  # type: ignore[misc]
 
         return wrapper
@@ -78,6 +114,9 @@ class KrakenRestClient(AbstractBroker):
 
     def __init__(self) -> None:
         self._exchange: ccxt.kraken | None = None
+        self.circuit_breaker = CircuitBreaker()
+        self.rate_limiter = KrakenRateLimiter(max_tokens=15, refill_rate=1.0)
+        self.matching_limiter = KrakenRateLimiter(max_tokens=60, refill_rate=1.0)
 
     # ── Lifecycle ──────────────────────────────────────
 
@@ -110,6 +149,11 @@ class KrakenRestClient(AbstractBroker):
         if self._exchange is None:
             raise RuntimeError("Broker not connected. Call connect() first.")
         return self._exchange
+
+    @property
+    def health_status(self) -> dict:
+        """Return the current circuit breaker state for all operations."""
+        return self.circuit_breaker.health_status
 
     # ── Market data ────────────────────────────────────
 

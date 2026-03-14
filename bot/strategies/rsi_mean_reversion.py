@@ -84,6 +84,84 @@ class RSIMeanReversionStrategy(AbstractStrategy):
         self._prev_rsi = rsi_now
         return signal
 
+    # ── Multi-timeframe confirmation ─────────────────
+
+    def on_bar_mtf(
+        self, pair: str, df_primary: pd.DataFrame, df_higher: pd.DataFrame
+    ) -> Signal | None:
+        """RSI mean-reversion on H1 confirmed by D1 context.
+
+        Higher-timeframe checks (D1):
+        - D1 RSI should be in the 35-65 range (room for mean reversion).
+        - Reject BUY if D1 RSI is already deeply oversold (< 25) – double-bottom risk.
+        - Reject SELL if D1 RSI is already deeply overbought (> 75) – could still rally.
+        - Bollinger Band proximity: favour BUY near lower band, SELL near upper band.
+        """
+        # Get primary-timeframe signal via existing logic
+        signal = self.on_bar(pair, df_primary)
+        if signal is None:
+            return None
+
+        # Validate higher-timeframe DataFrame
+        htf_required = {"rsi", "close"}
+        if not htf_required.issubset(df_higher.columns) or df_higher.empty:
+            return signal
+
+        htf = df_higher.iloc[-1]
+        d1_rsi = htf["rsi"]
+        d1_close = htf["close"]
+
+        if pd.isna(d1_rsi) or pd.isna(d1_close):
+            return signal
+
+        # ── RSI-based rejection ──
+        # Reject BUY when D1 RSI is extremely oversold (double-bottom risk)
+        if signal.signal_type == SignalType.BUY and d1_rsi < 25:
+            return None
+        # Reject SELL when D1 RSI is extremely overbought
+        if signal.signal_type == SignalType.SELL and d1_rsi > 75:
+            return None
+
+        # ── D1 RSI "room to revert" check ──
+        d1_rsi_has_room = 35 <= d1_rsi <= 65
+
+        # ── Bollinger Band proximity (optional columns) ──
+        bb_columns = {"bb_upper", "bb_lower"}
+        bb_available = bb_columns.issubset(df_higher.columns)
+        near_lower_band = False
+        near_upper_band = False
+
+        if bb_available:
+            bb_upper = htf["bb_upper"]
+            bb_lower = htf["bb_lower"]
+            if not (pd.isna(bb_upper) or pd.isna(bb_lower)):
+                bb_width = bb_upper - bb_lower
+                if bb_width > 0:
+                    position_in_band = (d1_close - bb_lower) / bb_width
+                    near_lower_band = position_in_band < 0.3
+                    near_upper_band = position_in_band > 0.7
+                    signal.metadata["d1_bb_position"] = round(float(position_in_band), 4)
+
+        # Boost confidence when D1 conditions are favourable
+        confidence_boost = 0.0
+        if d1_rsi_has_room:
+            confidence_boost += 0.10
+        if signal.signal_type == SignalType.BUY and near_lower_band:
+            confidence_boost += 0.10
+        elif signal.signal_type == SignalType.SELL and near_upper_band:
+            confidence_boost += 0.10
+
+        signal.confidence = min(signal.confidence + confidence_boost, 1.0)
+
+        # Attach D1 metadata
+        signal.metadata["d1_rsi"] = float(d1_rsi)
+        signal.metadata["d1_rsi_has_room"] = d1_rsi_has_room
+        if bb_available:
+            signal.metadata["d1_near_lower_band"] = near_lower_band
+            signal.metadata["d1_near_upper_band"] = near_upper_band
+
+        return signal
+
     def get_config(self) -> dict[str, Any]:
         return {
             "rsi_oversold": self.rsi_oversold,

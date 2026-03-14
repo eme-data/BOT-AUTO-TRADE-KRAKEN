@@ -74,6 +74,22 @@ class StrategyRegistry:
                 )
         return signals
 
+    def dispatch_bar_mtf(
+        self, pair: str, df_primary: pd.DataFrame, df_higher: pd.DataFrame
+    ) -> list[Signal]:
+        """Dispatch bars with multi-timeframe context to all strategies."""
+        signals: list[Signal] = []
+        for key, strategy in self._strategies.items():
+            try:
+                sig = strategy.on_bar_mtf(pair, df_primary, df_higher)
+                if sig:
+                    signals.append(sig)
+            except Exception as exc:
+                logger.error(
+                    "strategy_bar_mtf_error", key=key, error=str(exc)
+                )
+        return signals
+
     def load_defaults(self) -> None:
         """Load default strategies with default config."""
         self.register("macd_trend", MACDTrendStrategy())

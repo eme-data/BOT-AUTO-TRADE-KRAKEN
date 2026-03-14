@@ -15,7 +15,7 @@ from bot.config import ALL_DB_KEYS, SENSITIVE_KEYS, SETTINGS_SCHEMA, settings
 from bot.db.repository import SettingsRepository
 from bot.db.session import get_session
 from dashboard.api.auth.crypto import decrypt, encrypt
-from dashboard.api.deps import get_current_user
+from dashboard.api.deps import get_current_user, require_admin
 
 router = APIRouter(
     prefix="/api/settings",
@@ -92,7 +92,7 @@ async def get_category(category: str):
     return result
 
 
-@router.put("/category/{category}")
+@router.put("/category/{category}", dependencies=[Depends(require_admin)])
 async def update_category(category: str, body: CategoryUpdate):
     """Update all settings for a category at once."""
     if category not in SETTINGS_SCHEMA:
@@ -119,7 +119,7 @@ async def update_category(category: str, body: CategoryUpdate):
 
 # ── Individual setting ─────────────────────────────────
 
-@router.put("/")
+@router.put("/", dependencies=[Depends(require_admin)])
 async def update_setting(body: SettingUpdate):
     """Update a single setting."""
     if body.key not in ALL_DB_KEYS:
@@ -182,7 +182,7 @@ async def settings_status():
 
 # ── Test Kraken connection ─────────────────────────────
 
-@router.post("/test-connection")
+@router.post("/test-connection", dependencies=[Depends(require_admin)])
 async def test_kraken_connection(body: TestConnectionRequest):
     """Test Kraken API credentials without saving them."""
     import ccxt.async_support as ccxt
@@ -212,7 +212,7 @@ async def test_kraken_connection(body: TestConnectionRequest):
 
 # ── Reload bot settings ───────────────────────────────
 
-@router.post("/reload")
+@router.post("/reload", dependencies=[Depends(require_admin)])
 async def reload_settings():
     """Tell the bot to reload settings from DB."""
     await _notify_reload()

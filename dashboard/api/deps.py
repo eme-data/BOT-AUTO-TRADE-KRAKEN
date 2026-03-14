@@ -19,3 +19,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
     return payload
+
+
+def require_role(*roles: str):
+    """Dependency that checks user role."""
+    async def checker(user: dict = Depends(get_current_user)):
+        if user.get("role") not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        return user
+    return checker
+
+
+require_admin = require_role("admin")
+require_editor = require_role("admin", "editor")

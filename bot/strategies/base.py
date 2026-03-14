@@ -45,6 +45,21 @@ class AbstractStrategy(ABC):
     def on_bar(self, pair: str, df: pd.DataFrame) -> Signal | None:
         """React to a new completed bar with indicators."""
 
+    def on_bar_mtf(
+        self, pair: str, df_primary: pd.DataFrame, df_higher: pd.DataFrame
+    ) -> Signal | None:
+        """React to bars with multi-timeframe context.
+
+        Parameters
+        ----------
+        pair: trading pair identifier
+        df_primary: primary-timeframe DataFrame (e.g. H1) with indicators
+        df_higher: higher-timeframe DataFrame (e.g. D1) with indicators
+
+        Default implementation falls back to single-timeframe ``on_bar``.
+        """
+        return self.on_bar(pair, df_primary)
+
     @abstractmethod
     def get_config(self) -> dict[str, Any]:
         """Return current strategy parameters."""

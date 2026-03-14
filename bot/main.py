@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 from datetime import datetime, timezone
 
+import pandas as pd
 import redis.asyncio as redis
 import structlog
 
@@ -14,6 +16,7 @@ from bot.autopilot.manager import AutopilotManager
 from bot.broker.kraken_rest import KrakenRestClient
 from bot.broker.kraken_ws import KrakenWSClient
 from bot.broker.models import Direction, OrderRequest, Tick
+from bot.broker.paper_broker import PaperBroker
 from bot.config import settings, SENSITIVE_KEYS
 from bot.data.historical import HistoricalDataManager
 from bot.data.indicators import add_all_indicators
@@ -49,8 +52,13 @@ class TradingBot:
     """Central orchestrator for the Kraken trading bot."""
 
     def __init__(self) -> None:
-        # Core components
-        self.broker = KrakenRestClient()
+        # Core components – select broker based on paper trading mode
+        if settings.bot_paper_trading:
+            logger.info("bot_mode", mode="PAPER TRADING", msg="Using PaperBroker – no real orders will be placed")
+            self.broker = PaperBroker()
+        else:
+            logger.info("bot_mode", mode="LIVE", msg="Using KrakenRestClient – real orders enabled")
+            self.broker = KrakenRestClient()
         self.ws_client = KrakenWSClient()
         self.data_mgr = HistoricalDataManager(self.broker)
         self.strategy_registry = StrategyRegistry()
@@ -178,8 +186,9 @@ class TradingBot:
                 except Exception as exc:
                     logger.warning("warmup_error", pair=pair, error=str(exc))
 
-        await notify_bot_status("Bot started on Kraken")
-        logger.info("bot_started", pairs=list(self._active_pairs))
+        mode = "PAPER" if settings.bot_paper_trading else "LIVE"
+        await notify_bot_status(f"Bot started on Kraken ({mode} mode)")
+        logger.info("bot_started", pairs=list(self._active_pairs), mode=mode)
 
         # Start background tasks
         await asyncio.gather(
@@ -314,7 +323,8 @@ class TradingBot:
             pair=signal.pair,
         ).inc()
 
-        # Persist trade
+        # Persist trade (mark as PAPER when in paper trading mode)
+        trade_status = "PAPER" if settings.bot_paper_trading else None
         async with get_session() as session:
             repo = TradeRepository(session)
             await repo.create_trade(
@@ -336,6 +346,7 @@ class TradingBot:
                 fee=result.fee,
                 strategy=signal.strategy_name,
                 metadata_=signal.metadata,
+                **({"status": trade_status} if trade_status else {}),
             )
 
             sig_repo = SignalRepository(session)
@@ -360,6 +371,23 @@ class TradingBot:
                     order_id=result.order_id,
                 )
             )
+
+        # Publish trade opened event to Redis
+        if self._redis:
+            try:
+                await self._redis.publish(
+                    "bot:trades",
+                    json.dumps({
+                        "type": "trade_opened",
+                        "pair": signal.pair,
+                        "direction": signal.direction.value,
+                        "price": result.price,
+                        "size": size,
+                        "strategy": signal.strategy_name,
+                    }),
+                )
+            except Exception:
+                pass
 
         # Notify
         await notify_trade_opened(
@@ -408,6 +436,21 @@ class TradingBot:
                     profit=profit,
                     fee=result.fee,
                 )
+
+            # Publish trade closed event to Redis
+            if self._redis:
+                try:
+                    await self._redis.publish(
+                        "bot:trades",
+                        json.dumps({
+                            "type": "trade_closed",
+                            "pair": stop.pair,
+                            "profit": profit,
+                            "exit_price": tick.last,
+                        }),
+                    )
+                except Exception:
+                    pass
 
             logger.info(
                 "trailing_stop_hit",
@@ -520,18 +563,50 @@ class TradingBot:
     # ── Background loops ───────────────────────────────
 
     async def _bar_update_loop(self) -> None:
-        """Fetch fresh bars every 5 minutes and run bar-based strategies."""
+        """Fetch fresh bars every 5 minutes and run bar-based strategies.
+
+        Fetches both H1 (primary) and D1 (higher-timeframe) data.  When D1
+        data is available the multi-timeframe dispatch path is used; otherwise
+        the original single-timeframe ``dispatch_bar`` is used as a fallback.
+        """
         while self._running:
             await asyncio.sleep(300)  # 5 min
             if not settings.is_configured:
                 continue
             for pair in list(self._active_pairs):
                 try:
+                    # Primary timeframe – H1
                     df = await self.data_mgr.get_bars(pair, interval_minutes=60, count=250)
                     if df.empty:
                         continue
                     df = add_all_indicators(df)
-                    signals = self.strategy_registry.dispatch_bar(pair, df)
+
+                    # Higher timeframe – D1
+                    df_d1: pd.DataFrame | None = None
+                    try:
+                        df_d1 = await self.data_mgr.get_bars(
+                            pair, interval_minutes=1440, count=100
+                        )
+                        if df_d1 is not None and not df_d1.empty:
+                            df_d1 = add_all_indicators(df_d1)
+                        else:
+                            df_d1 = None
+                    except Exception as d1_exc:
+                        logger.warning(
+                            "d1_fetch_error",
+                            pair=pair,
+                            error=str(d1_exc),
+                        )
+                        df_d1 = None
+
+                    # Dispatch – prefer multi-timeframe when D1 is available
+                    if df_d1 is not None:
+                        signals = self.strategy_registry.dispatch_bar_mtf(
+                            pair, df, df_d1
+                        )
+                    else:
+                        signals = self.strategy_registry.dispatch_bar(pair, df)
+
                     for signal in signals:
                         await self._process_signal(signal)
                 except Exception as exc:
@@ -551,13 +626,16 @@ class TradingBot:
                 positions = await self.broker.get_open_positions()
                 open_positions_gauge.set(len(positions))
 
-                # Publish status to Redis
+                # Publish status to Redis as JSON
                 if self._redis:
                     await self._redis.publish(
                         "bot:status",
-                        f"balance={balance.total_balance:.2f} "
-                        f"pnl={self.risk_manager.state.daily_pnl:.2f} "
-                        f"positions={len(positions)}",
+                        json.dumps({
+                            "type": "status",
+                            "balance": balance.total_balance,
+                            "pnl": self.risk_manager.state.daily_pnl,
+                            "positions": len(positions),
+                        }),
                     )
             except Exception as exc:
                 logger.error("metrics_error", error=str(exc))

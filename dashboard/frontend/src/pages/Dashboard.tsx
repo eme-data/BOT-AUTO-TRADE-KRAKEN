@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
+import { useWebSocket } from '../hooks/useWebSocket'
 import {
   LineChart,
   Line,
@@ -29,11 +30,42 @@ interface Trade {
   opened_at: string
 }
 
+interface WsStatusMessage {
+  type: 'status'
+  balance: number
+  pnl: number
+  positions: number
+}
+
+interface WsTradeOpenedMessage {
+  type: 'trade_opened'
+  pair: string
+  direction: string
+  price: number
+  size: number
+  strategy: string
+}
+
+interface WsTradeClosedMessage {
+  type: 'trade_closed'
+  pair: string
+  profit: number
+  exit_price: number
+}
+
+type WsMessage = WsStatusMessage | WsTradeOpenedMessage | WsTradeClosedMessage
+
 export default function Dashboard({ token }: DashboardProps) {
   const api = useApi(token)
+  const { lastMessage, connected } = useWebSocket('/ws/dashboard')
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Live metrics from WebSocket
+  const [liveBalance, setLiveBalance] = useState<number | null>(null)
+  const [livePnl, setLivePnl] = useState<number | null>(null)
+  const [livePositions, setLivePositions] = useState<number | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -55,9 +87,40 @@ export default function Dashboard({ token }: DashboardProps) {
     return () => clearInterval(interval)
   }, [token])
 
+  // Handle incoming WebSocket messages
+  useEffect(() => {
+    if (!lastMessage) return
+
+    const msg = lastMessage as WsMessage
+
+    if (msg.type === 'status') {
+      setLiveBalance(msg.balance)
+      setLivePnl(msg.pnl)
+      setLivePositions(msg.positions)
+    } else if (msg.type === 'trade_opened') {
+      const newTrade: Trade = {
+        id: Date.now(), // temporary ID for display
+        pair: msg.pair,
+        direction: msg.direction,
+        profit: null,
+        status: 'OPEN',
+        opened_at: new Date().toISOString(),
+      }
+      setTrades((prev) => [newTrade, ...prev].slice(0, 20))
+    } else if (msg.type === 'trade_closed') {
+      setTrades((prev) =>
+        prev.map((t) =>
+          t.pair === msg.pair && t.status === 'OPEN'
+            ? { ...t, status: 'CLOSED', profit: msg.profit }
+            : t,
+        ),
+      )
+    }
+  }, [lastMessage])
+
   const closedTrades = trades.filter((t) => t.status === 'CLOSED')
   const openTrades = trades.filter((t) => t.status === 'OPEN')
-  const totalPnl = closedTrades.reduce((s, t) => s + (t.profit || 0), 0)
+  const totalPnl = livePnl ?? closedTrades.reduce((s, t) => s + (t.profit || 0), 0)
   const winRate = closedTrades.length
     ? (closedTrades.filter((t) => (t.profit || 0) > 0).length /
         closedTrades.length) *
@@ -82,7 +145,19 @@ export default function Dashboard({ token }: DashboardProps) {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold">Dashboard</h2>
+        <div className="flex items-center gap-2 text-sm">
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${
+              connected ? 'bg-green-400' : 'bg-red-400'
+            }`}
+          />
+          <span className={connected ? 'text-green-400' : 'text-red-400'}>
+            {connected ? 'Live' : 'Disconnected'}
+          </span>
+        </div>
+      </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-4 gap-4 mb-8">
@@ -107,10 +182,18 @@ export default function Dashboard({ token }: DashboardProps) {
         <StatCard
           icon={<AlertTriangle size={20} />}
           label="Open Positions"
-          value={String(openTrades.length)}
+          value={String(livePositions ?? openTrades.length)}
           color="purple"
         />
       </div>
+
+      {/* Live balance card */}
+      {liveBalance !== null && (
+        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 mb-8">
+          <p className="text-gray-500 text-xs mb-1">Account Balance (live)</p>
+          <p className="text-xl font-bold font-mono">${liveBalance.toFixed(2)}</p>
+        </div>
+      )}
 
       {/* Equity curve */}
       {pnlData.length > 0 && (

@@ -6,7 +6,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
 
 from bot.config import settings
-from dashboard.api.deps import get_current_user
+from dashboard.api.deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/bot", tags=["bot"], dependencies=[Depends(get_current_user)])
 
@@ -26,7 +26,7 @@ async def bot_status():
         return {"status": "unknown", "details": "Redis unavailable"}
 
 
-@router.post("/stop")
+@router.post("/stop", dependencies=[Depends(require_admin)])
 async def stop_bot():
     r = await _get_redis()
     await r.publish("bot:commands", "stop")
@@ -34,7 +34,7 @@ async def stop_bot():
     return {"message": "Stop command sent"}
 
 
-@router.post("/autopilot/scan")
+@router.post("/autopilot/scan", dependencies=[Depends(require_admin)])
 async def trigger_scan():
     r = await _get_redis()
     await r.publish("bot:commands", "autopilot_scan_now")
@@ -42,7 +42,7 @@ async def trigger_scan():
     return {"message": "Scan triggered"}
 
 
-@router.post("/daily-reset")
+@router.post("/daily-reset", dependencies=[Depends(require_admin)])
 async def daily_reset():
     r = await _get_redis()
     await r.publish("bot:commands", "daily_reset")

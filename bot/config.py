@@ -51,6 +51,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "bot_risk_per_trade_pct": {"label": "Risk Per Trade (%)", "type": "number", "default": 2.0},
         "bot_default_stop_pct": {"label": "Default Stop (%)", "type": "number", "default": 3.0},
         "bot_default_limit_pct": {"label": "Default Limit (%)", "type": "number", "default": 6.0},
+        "bot_paper_trading": {"label": "Paper Trading Mode", "type": "toggle", "default": True},
     },
     "autopilot": {
         "autopilot_enabled": {"label": "Enabled", "type": "toggle", "default": False},
@@ -62,6 +63,8 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
     "notifications": {
         "telegram_bot_token": {"label": "Telegram Bot Token", "type": "password", "default": ""},
         "telegram_chat_id": {"label": "Telegram Chat ID", "type": "text", "default": ""},
+        "discord_webhook_url": {"label": "Discord Webhook URL", "type": "text", "default": ""},
+        "discord_enabled": {"label": "Notifications Discord", "type": "toggle", "default": False},
     },
     "ai": {
         "ai_enabled": {"label": "Activer l'analyse IA", "type": "toggle", "default": False},
@@ -127,6 +130,7 @@ class Settings(BaseSettings):
     bot_risk_per_trade_pct: float = 2.0
     bot_default_stop_pct: float = 3.0
     bot_default_limit_pct: float = 6.0
+    bot_paper_trading: bool = True
 
     autopilot_enabled: bool = False
     autopilot_shadow_mode: bool = True
@@ -136,6 +140,9 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    discord_webhook_url: str = ""
+    discord_enabled: bool = False
 
     # ── AI (Claude) ────────────────────────────────────
     ai_enabled: bool = False

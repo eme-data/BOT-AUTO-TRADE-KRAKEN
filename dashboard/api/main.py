@@ -12,6 +12,7 @@ from dashboard.api.routers import (
     markets,
     settings_router,
     trades,
+    users,
     ws,
 )
 
@@ -39,6 +40,7 @@ app.include_router(settings_router.router)
 app.include_router(markets.router)
 app.include_router(ws.router)
 app.include_router(ai.router)
+app.include_router(users.router)
 
 
 @app.get("/api/health")

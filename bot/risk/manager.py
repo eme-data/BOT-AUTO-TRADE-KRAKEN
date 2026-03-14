@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from bot.broker.fees import KrakenFeeCalculator
 from bot.broker.models import AccountBalance, Direction, Position
 from bot.config import settings
 from bot.strategies.base import Signal, SignalType
@@ -27,6 +28,7 @@ CORRELATION_GROUPS: dict[str, list[str]] = {
 class RiskCheckResult:
     allowed: bool
     reason: str = ""
+    estimated_fees: float = 0.0
 
 
 @dataclass
@@ -39,13 +41,16 @@ class RiskState:
 class RiskManager:
     """Validates trade signals against risk rules."""
 
-    def __init__(self) -> None:
+    def __init__(self, thirty_day_volume: float = 0.0) -> None:
         self.state = RiskState()
         self.max_daily_loss = settings.bot_max_daily_loss
         self.max_position_size = settings.bot_max_position_size
         self.max_open_positions = settings.bot_max_open_positions
         self.max_per_pair = settings.bot_max_per_pair
         self.risk_per_trade_pct = settings.bot_risk_per_trade_pct
+        self.fee_calculator = KrakenFeeCalculator(
+            thirty_day_volume=thirty_day_volume,
+        )
 
     def check_signal(
         self,
@@ -106,7 +111,11 @@ class RiskManager:
         balance: AccountBalance,
         current_price: float,
     ) -> float:
-        """Calculate position size based on risk percentage."""
+        """Calculate position size based on risk percentage.
+
+        Estimated round-trip fees are subtracted from the risk budget
+        so that the effective risk stays within limits.
+        """
         if signal.size:
             return min(signal.size, self.max_position_size)
 
@@ -121,7 +130,29 @@ class RiskManager:
 
         # Size = risk_amount / (price × stop%)
         if current_price > 0 and stop_pct > 0:
-            size = risk_amount / (current_price * (stop_pct / 100))
+            # First pass: compute a preliminary size
+            preliminary_size = risk_amount / (current_price * (stop_pct / 100))
+
+            # Estimate round-trip fees for the preliminary size
+            estimated_fees = self.fee_calculator.estimate_round_trip(
+                size=preliminary_size,
+                entry_price=current_price,
+                exit_price=current_price,
+            )
+
+            # Subtract fees from risk budget and recalculate
+            adjusted_risk = risk_amount - estimated_fees
+            if adjusted_risk > 0:
+                size = adjusted_risk / (current_price * (stop_pct / 100))
+            else:
+                size = 0.0
+
+            logger.debug(
+                "position_size_fee_adjusted",
+                preliminary_size=preliminary_size,
+                estimated_fees=estimated_fees,
+                adjusted_size=size,
+            )
         else:
             size = 0.0
 

@@ -57,6 +57,14 @@ class TradeRepository:
         )
         return list(result.scalars().all())
 
+    async def get_trades_since(self, since: datetime) -> list[Trade]:
+        result = await self.session.execute(
+            select(Trade)
+            .where(Trade.opened_at >= since)
+            .order_by(Trade.opened_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def get_daily_pnl(self, date: datetime) -> float:
         result = await self.session.execute(
             select(Trade.profit)
