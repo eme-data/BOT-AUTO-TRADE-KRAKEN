@@ -326,7 +326,7 @@ export default function Dashboard({ token }: DashboardProps) {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard
           icon={<Activity size={20} />}
           label="Bot Status"
@@ -366,7 +366,7 @@ export default function Dashboard({ token }: DashboardProps) {
         </div>
         {krakenBalance ? (
           <>
-            <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
               <div>
                 <p className="text-gray-500 text-xs mb-1">Solde total</p>
                 <p className="text-2xl font-bold font-mono">${krakenBalance.total_balance.toFixed(2)}</p>
