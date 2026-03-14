@@ -8,7 +8,6 @@ import {
   Loader2,
   Send,
   Clock,
-  TrendingUp,
   BarChart3,
 } from 'lucide-react'
 
@@ -284,11 +283,11 @@ export default function AIAnalysis({ token }: { token: string }) {
             <p className="text-sm text-gray-300">
               {analysisResult.reasoning as string}
             </p>
-            {analysisResult.market_summary && (
+            {analysisResult.market_summary ? (
               <p className="text-xs text-gray-500 italic">
-                {analysisResult.market_summary as string}
+                {String(analysisResult.market_summary)}
               </p>
-            )}
+            ) : null}
             {(analysisResult.risk_warnings as string[])?.length > 0 && (
               <div className="text-xs text-yellow-400 space-y-0.5">
                 {(analysisResult.risk_warnings as string[]).map((w, i) => (

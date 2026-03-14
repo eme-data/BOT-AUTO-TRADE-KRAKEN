@@ -335,7 +335,7 @@ export default function Settings({ token }: { token: string }) {
 // ── Field component ───────────────────────────────────
 
 function SettingField({
-  fieldKey,
+  fieldKey: _fieldKey,
   meta,
   value,
   onChange,
