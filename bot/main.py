@@ -79,7 +79,7 @@ class TradingBot:
 
     async def _load_settings_from_db(self) -> None:
         """Load trading settings from DB, decrypting sensitive values."""
-        from dashboard.api.auth.crypto import decrypt
+        from bot.crypto import decrypt
 
         try:
             async with get_session() as session:

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from bot.config import ALL_DB_KEYS, SENSITIVE_KEYS, SETTINGS_SCHEMA, settings
 from bot.db.repository import SettingsRepository
 from bot.db.session import get_session
-from dashboard.api.auth.crypto import decrypt, encrypt
+from bot.crypto import decrypt, encrypt
 from dashboard.api.deps import get_current_user, require_admin
 
 router = APIRouter(
