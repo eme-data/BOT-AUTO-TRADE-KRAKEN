@@ -54,12 +54,14 @@ async def get_settings_schema(user_id: int = Depends(get_user_id)):
     for category, fields in SETTINGS_SCHEMA.items():
         cat_fields: dict[str, dict] = {}
         for key, meta in fields.items():
-            current = db_values.get(key, "")
+            raw = db_values.get(key)
+            # Use DB value if present, otherwise fall back to schema default
+            current = raw if raw is not None and raw != "" else meta.get("default", "")
             is_sensitive = key in SENSITIVE_KEYS
             cat_fields[key] = {
                 **meta,
                 "value": "***" if (is_sensitive and current) else current,
-                "has_value": bool(current),
+                "has_value": raw is not None and raw != "",
                 "sensitive": is_sensitive,
             }
         result[category] = cat_fields

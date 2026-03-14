@@ -54,7 +54,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "bot_paper_trading": {"label": "Paper Trading Mode", "type": "toggle", "default": True},
     },
     "autopilot": {
-        "autopilot_enabled": {"label": "Enabled", "type": "toggle", "default": False},
+        "autopilot_enabled": {"label": "Enabled", "type": "toggle", "default": True},
         "autopilot_shadow_mode": {"label": "Shadow Mode (paper)", "type": "toggle", "default": True},
         "autopilot_scan_interval_minutes": {"label": "Scan Interval (min)", "type": "number", "default": 60},
         "autopilot_max_active": {"label": "Max Active Pairs", "type": "number", "default": 3},
@@ -83,7 +83,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "ai_min_confidence": {"label": "Confiance min. pour valider (%)", "type": "number", "default": 0.5},
     },
     "polymarket": {
-        "polymarket_enabled": {"label": "Enable Polymarket Sentiment", "type": "toggle", "default": False},
+        "polymarket_enabled": {"label": "Enable Polymarket Sentiment", "type": "toggle", "default": True},
         "polymarket_cache_ttl_minutes": {"label": "Cache TTL (minutes)", "type": "number", "default": 15},
     },
 }
@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     bot_default_limit_pct: float = 6.0
     bot_paper_trading: bool = True
 
-    autopilot_enabled: bool = False
+    autopilot_enabled: bool = True
     autopilot_shadow_mode: bool = True
     autopilot_scan_interval_minutes: int = 30
     autopilot_max_active: int = 3
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     ai_min_confidence: float = 0.5
 
     # ── Polymarket ─────────────────────────────────────
-    polymarket_enabled: bool = False
+    polymarket_enabled: bool = True
     polymarket_cache_ttl_minutes: int = 15
 
     # ── Derived ────────────────────────────────────────
@@ -237,7 +237,7 @@ class UserSettings:
         "bot_default_stop_pct": 3.0,
         "bot_default_limit_pct": 6.0,
         "bot_paper_trading": True,
-        "autopilot_enabled": False,
+        "autopilot_enabled": True,
         "autopilot_shadow_mode": True,
         "autopilot_scan_interval_minutes": 30,
         "autopilot_max_active": 3,
@@ -255,7 +255,7 @@ class UserSettings:
         "ai_sentiment_enabled": False,
         "ai_post_trade_enabled": True,
         "ai_min_confidence": 0.5,
-        "polymarket_enabled": False,
+        "polymarket_enabled": True,
         "polymarket_cache_ttl_minutes": 15,
     }
 
