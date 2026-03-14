@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal } from 'lucide-react'
+import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3 } from 'lucide-react'
 
 interface DashboardProps {
   token: string
@@ -35,6 +35,21 @@ interface LogEntry {
   level: string
   event: string
   [key: string]: unknown
+}
+
+interface CryptoPrice {
+  pair: string
+  last: number
+  bid: number
+  ask: number
+  spread: number
+  volume: number
+}
+
+interface AIStatusData {
+  enabled: boolean
+  configured: boolean
+  model: string
 }
 
 interface WsStatusMessage {
@@ -90,6 +105,12 @@ export default function Dashboard({ token }: DashboardProps) {
   } | null>(null)
   const [balanceError, setBalanceError] = useState<string | null>(null)
 
+  // Crypto prices
+  const [prices, setPrices] = useState<CryptoPrice[]>([])
+
+  // AI status
+  const [aiStatus, setAiStatus] = useState<AIStatusData | null>(null)
+
   // Bot logs
   const [logs, setLogs] = useState<LogEntry[]>([])
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -109,7 +130,7 @@ export default function Dashboard({ token }: DashboardProps) {
         setLoading(false)
       }
 
-      // Fetch balance separately so it doesn't block the rest
+      // Fetch balance, prices, AI status separately so they don't block the rest
       try {
         const balanceRes = await api.get('/bot/balance')
         if (balanceRes.data && !balanceRes.data.error) {
@@ -121,6 +142,16 @@ export default function Dashboard({ token }: DashboardProps) {
       } catch {
         setBalanceError('Impossible de recuperer le solde')
       }
+
+      try {
+        const pricesRes = await api.get('/markets/prices')
+        if (Array.isArray(pricesRes.data)) setPrices(pricesRes.data)
+      } catch { /* prices not available */ }
+
+      try {
+        const aiRes = await api.get('/ai/status')
+        if (aiRes.data) setAiStatus(aiRes.data)
+      } catch { /* ai not available */ }
     }
     fetchData()
     const interval = setInterval(fetchData, 30000)
@@ -213,15 +244,36 @@ export default function Dashboard({ token }: DashboardProps) {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold">Dashboard</h2>
-        <div className="flex items-center gap-2 text-sm">
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${
-              connected ? 'bg-green-400' : 'bg-red-400'
-            }`}
-          />
-          <span className={connected ? 'text-green-400' : 'text-red-400'}>
-            {connected ? 'Live' : 'Disconnected'}
-          </span>
+        <div className="flex items-center gap-3 text-sm">
+          {/* AI Status badge */}
+          {aiStatus && (
+            <span
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
+                aiStatus.enabled && aiStatus.configured
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : 'bg-gray-700 text-gray-400'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                aiStatus.enabled && aiStatus.configured ? 'bg-purple-400' : 'bg-gray-500'
+              }`} />
+              IA {aiStatus.enabled && aiStatus.configured ? 'ON' : 'OFF'}
+              {aiStatus.configured && aiStatus.model && (
+                <span className="text-gray-500 ml-1">({aiStatus.model.replace('claude-', '').split('-')[0]})</span>
+              )}
+            </span>
+          )}
+          {/* Live status */}
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${
+                connected ? 'bg-green-400' : 'bg-red-400'
+              }`}
+            />
+            <span className={connected ? 'text-green-400' : 'text-red-400'}>
+              {connected ? 'Live' : 'Disconnected'}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -307,6 +359,37 @@ export default function Dashboard({ token }: DashboardProps) {
           </p>
         )}
       </div>
+
+      {/* Crypto Prices */}
+      {prices.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
+          <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-800 bg-gray-800/30">
+            <BarChart3 size={18} className="text-blue-400" />
+            <h3 className="font-semibold">Marche Crypto</h3>
+            <span className="text-xs text-gray-500 ml-auto">Prix en temps reel</span>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-0">
+            {prices.map((p) => {
+              const symbol = p.pair.replace('/USD', '')
+              return (
+                <div key={p.pair} className="px-4 py-3 border-b border-r border-gray-800/50 hover:bg-gray-800/30 transition">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-semibold text-sm">{symbol}</span>
+                    <span className="text-xs text-gray-600">USD</span>
+                  </div>
+                  <p className="text-lg font-bold font-mono">
+                    {p.last >= 1 ? `$${p.last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `$${p.last.toFixed(4)}`}
+                  </p>
+                  <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
+                    <span>Spread: ${p.spread < 1 ? p.spread.toFixed(4) : p.spread.toFixed(2)}</span>
+                    <span>Vol: {p.volume >= 1000 ? `${(p.volume / 1000).toFixed(1)}K` : p.volume.toFixed(1)}</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Equity curve */}
       {pnlData.length > 0 && (
