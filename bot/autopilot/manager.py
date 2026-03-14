@@ -29,6 +29,7 @@ class AutopilotManager:
         data_mgr: HistoricalDataManager,
         strategy_registry: StrategyRegistry,
         redis_client=None,
+        user_id: int | None = None,
     ) -> None:
         self._broker = broker
         self._ws = ws_client
@@ -36,6 +37,7 @@ class AutopilotManager:
         self._scorer = MarketScorer(data_mgr)
         self._registry = strategy_registry
         self._redis = redis_client
+        self._user_id = user_id
         self._active_pairs: dict[str, MarketScore] = {}
         self._last_all_scores: list[MarketScore] = []
         self.enabled = settings.autopilot_enabled
@@ -147,7 +149,11 @@ class AutopilotManager:
                 "active_count": len(active),
                 "total_scanned": len(all_scores),
             }
-            await self._redis.set("bot:autopilot_scores", json.dumps(data))
+            key = f"bot:user:{self._user_id}:autopilot_scores" if self._user_id else "bot:autopilot_scores"
+            await self._redis.set(key, json.dumps(data))
+            # Legacy key for backwards compat
+            if self._user_id:
+                await self._redis.set("bot:autopilot_scores", json.dumps(data))
         except Exception as exc:
             logger.warning("autopilot_publish_error", error=str(exc))
 

@@ -10,7 +10,7 @@ from bot.ai.models import AnalysisMode, AIAnalysisRequest
 from bot.config import settings
 from bot.db.repository import AIAnalysisRepository
 from bot.db.session import get_session
-from dashboard.api.deps import get_current_user
+from dashboard.api.deps import get_current_user, get_user_id
 
 router = APIRouter(
     prefix="/api/ai",
@@ -22,7 +22,7 @@ router = APIRouter(
 # ── Status ─────────────────────────────────────────────
 
 @router.get("/status")
-async def ai_status():
+async def ai_status(user_id: int = Depends(get_user_id)):
     """Check if AI is configured and enabled – reads from DB for fresh values."""
     from bot.crypto import decrypt
     from bot.db.repository import SettingsRepository
@@ -39,7 +39,7 @@ async def ai_status():
 
     try:
         async with _get_session() as session:
-            repo = SettingsRepository(session)
+            repo = SettingsRepository(session, user_id=user_id)
             db_values = await repo.get_decrypted_values(decrypt)
             if db_values:
                 ai_enabled = str(db_values.get("ai_enabled", "")).lower() in ("true", "1", "yes", "on") if "ai_enabled" in db_values else ai_enabled
@@ -68,10 +68,10 @@ async def ai_status():
 # ── Analysis logs ──────────────────────────────────────
 
 @router.get("/logs")
-async def get_logs(limit: int = 50):
+async def get_logs(limit: int = 50, user_id: int = Depends(get_user_id)):
     """Get recent AI analysis logs."""
     async with get_session() as session:
-        repo = AIAnalysisRepository(session)
+        repo = AIAnalysisRepository(session, user_id=user_id)
         logs = await repo.get_recent(limit=limit)
         return [
             {
@@ -95,10 +95,10 @@ async def get_logs(limit: int = 50):
 
 
 @router.get("/logs/{pair}")
-async def get_logs_by_pair(pair: str, limit: int = 20):
+async def get_logs_by_pair(pair: str, limit: int = 20, user_id: int = Depends(get_user_id)):
     """Get AI analysis logs for a specific pair."""
     async with get_session() as session:
-        repo = AIAnalysisRepository(session)
+        repo = AIAnalysisRepository(session, user_id=user_id)
         logs = await repo.get_by_pair(pair, limit=limit)
         return [
             {
@@ -122,10 +122,10 @@ async def get_logs_by_pair(pair: str, limit: int = 20):
 # ── Stats ──────────────────────────────────────────────
 
 @router.get("/stats")
-async def get_stats():
+async def get_stats(user_id: int = Depends(get_user_id)):
     """Get AI analysis statistics."""
     async with get_session() as session:
-        repo = AIAnalysisRepository(session)
+        repo = AIAnalysisRepository(session, user_id=user_id)
         return await repo.get_stats()
 
 
@@ -137,18 +137,18 @@ class ManualAnalysisRequest(BaseModel):
 
 
 @router.post("/analyze")
-async def trigger_analysis(body: ManualAnalysisRequest):
+async def trigger_analysis(body: ManualAnalysisRequest, user_id: int = Depends(get_user_id)):
     """Trigger a manual AI analysis for a pair."""
     from bot.crypto import decrypt
     from bot.db.repository import SettingsRepository
     from bot.db.session import get_session as _get_session
 
-    # Read fresh AI settings from DB
+    # Read fresh AI settings from DB for this user
     ai_enabled = settings.ai_enabled
     ai_api_key = settings.ai_api_key
     try:
         async with _get_session() as session:
-            repo = SettingsRepository(session)
+            repo = SettingsRepository(session, user_id=user_id)
             db_values = await repo.get_decrypted_values(decrypt)
             if db_values:
                 if "ai_enabled" in db_values:
@@ -210,9 +210,9 @@ async def trigger_analysis(body: ManualAnalysisRequest):
 
             result = await analyzer.analyze(request)
 
-            # Save to DB
+            # Save to DB scoped to user
             async with get_session() as session:
-                ai_repo = AIAnalysisRepository(session)
+                ai_repo = AIAnalysisRepository(session, user_id=user_id)
                 await ai_repo.save(
                     pair=body.pair,
                     mode=body.mode,

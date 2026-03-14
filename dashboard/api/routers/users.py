@@ -48,7 +48,11 @@ def _hash_password(password: str) -> str:
 @router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
     """Return current user info from token."""
-    return {"username": user.get("sub"), "role": user.get("role", "viewer")}
+    return {
+        "username": user.get("sub"),
+        "role": user.get("role", "viewer"),
+        "user_id": user.get("user_id"),
+    }
 
 
 @router.get("/", response_model=list[UserOut], dependencies=[Depends(require_admin)])

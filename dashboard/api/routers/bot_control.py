@@ -8,7 +8,7 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
 
 from bot.config import settings
-from dashboard.api.deps import get_current_user, require_admin
+from dashboard.api.deps import get_current_user, get_user_id, require_admin
 
 router = APIRouter(prefix="/api/bot", tags=["bot"], dependencies=[Depends(get_current_user)])
 
@@ -17,11 +17,19 @@ async def _get_redis() -> aioredis.Redis:
     return aioredis.from_url(settings.redis_url)
 
 
+def _rkey(user_id: int | None, key: str) -> str:
+    if user_id:
+        return f"bot:user:{user_id}:{key}"
+    return f"bot:{key}"
+
+
 @router.get("/status")
-async def bot_status():
+async def bot_status(user_id: int = Depends(get_user_id)):
     try:
         r = await _get_redis()
-        status_msg = await r.get("bot:last_status")
+        status_msg = await r.get(_rkey(user_id, "last_status"))
+        if not status_msg:
+            status_msg = await r.get("bot:last_status")
         await r.close()
         return {"status": "running", "details": status_msg.decode() if status_msg else "unknown"}
     except Exception:
@@ -29,16 +37,16 @@ async def bot_status():
 
 
 @router.get("/balance")
-async def bot_balance():
+async def bot_balance(user_id: int = Depends(get_user_id)):
     """Get Kraken account balance (real or paper)."""
     from bot.crypto import decrypt
     from bot.db.repository import SettingsRepository
     from bot.db.session import get_session
 
-    # Load fresh credentials from DB
+    # Load fresh credentials from DB for this user
     try:
         async with get_session() as session:
-            repo = SettingsRepository(session)
+            repo = SettingsRepository(session, user_id=user_id)
             db_values = await repo.get_decrypted_values(decrypt)
     except Exception:
         db_values = {}
@@ -53,7 +61,10 @@ async def bot_balance():
     if acc_type == "DEMO" or is_paper:
         try:
             r = await _get_redis()
-            status_raw = await r.get("bot:last_balance")
+            # Try user-specific key first, fallback to global
+            status_raw = await r.get(_rkey(user_id, "last_balance"))
+            if not status_raw:
+                status_raw = await r.get("bot:last_balance")
             await r.close()
             if status_raw:
                 data = json.loads(status_raw.decode())
@@ -73,23 +84,14 @@ async def bot_balance():
     if not api_key or not api_secret:
         return {"error": "Kraken credentials not configured"}
 
-    # LIVE mode: connect to real Kraken API
+    # LIVE mode: connect to real Kraken API with user's credentials
     from bot.broker.kraken_rest import KrakenRestClient
 
-    old_key = settings.kraken_api_key
-    old_secret = settings.kraken_api_secret
-    old_acc = settings.kraken_acc_type
-    object.__setattr__(settings, "kraken_api_key", api_key)
-    object.__setattr__(settings, "kraken_api_secret", api_secret)
-    object.__setattr__(settings, "kraken_acc_type", "LIVE")  # Force LIVE, never sandbox
-
-    broker = KrakenRestClient()
+    broker = KrakenRestClient(api_key=api_key, api_secret=api_secret)
 
     try:
         await broker.connect()
         balance = await broker.get_account_balance()
-
-        # Also get open positions
         positions = await broker.get_open_positions()
 
         return {
@@ -113,33 +115,35 @@ async def bot_balance():
         return {"error": str(exc)}
     finally:
         await broker.disconnect()
-        object.__setattr__(settings, "kraken_api_key", old_key)
-        object.__setattr__(settings, "kraken_api_secret", old_secret)
-        object.__setattr__(settings, "kraken_acc_type", old_acc)
 
 
 @router.post("/stop", dependencies=[Depends(require_admin)])
-async def stop_bot():
+async def stop_bot(user_id: int = Depends(get_user_id)):
     r = await _get_redis()
-    await r.publish("bot:commands", "stop")
+    await r.publish(_rkey(user_id, "commands"), "stop")
     await r.close()
     return {"message": "Stop command sent"}
 
 
 @router.post("/autopilot/scan", dependencies=[Depends(require_admin)])
-async def trigger_scan():
+async def trigger_scan(user_id: int = Depends(get_user_id)):
     r = await _get_redis()
+    await r.publish(_rkey(user_id, "commands"), "autopilot_scan_now")
+    # Also publish on global channel for backwards compat
     await r.publish("bot:commands", "autopilot_scan_now")
     await r.close()
     return {"message": "Scan triggered"}
 
 
 @router.get("/autopilot/scores")
-async def autopilot_scores():
+async def autopilot_scores(user_id: int = Depends(get_user_id)):
     """Get latest autopilot scan scores from Redis."""
     try:
         r = await _get_redis()
-        raw = await r.get("bot:autopilot_scores")
+        # Try user-specific key first
+        raw = await r.get(_rkey(user_id, "autopilot_scores"))
+        if not raw:
+            raw = await r.get("bot:autopilot_scores")
         await r.close()
         if raw:
             return json.loads(raw.decode())
@@ -149,19 +153,22 @@ async def autopilot_scores():
 
 
 @router.post("/daily-reset", dependencies=[Depends(require_admin)])
-async def daily_reset():
+async def daily_reset(user_id: int = Depends(get_user_id)):
     r = await _get_redis()
-    await r.publish("bot:commands", "daily_reset")
+    await r.publish(_rkey(user_id, "commands"), "daily_reset")
     await r.close()
     return {"message": "Daily reset command sent"}
 
 
 @router.get("/logs")
-async def bot_logs(limit: int = 100):
+async def bot_logs(limit: int = 100, user_id: int = Depends(get_user_id)):
     """Get recent bot logs from Redis list."""
     try:
         r = await _get_redis()
-        raw = await r.lrange("bot:logs:history", 0, limit - 1)
+        # Try user-specific key first
+        raw = await r.lrange(_rkey(user_id, "logs:history"), 0, limit - 1)
+        if not raw:
+            raw = await r.lrange("bot:logs:history", 0, limit - 1)
         await r.close()
         logs = []
         for item in raw:

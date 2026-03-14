@@ -15,7 +15,7 @@ from bot.config import ALL_DB_KEYS, SENSITIVE_KEYS, SETTINGS_SCHEMA, settings
 from bot.db.repository import SettingsRepository
 from bot.db.session import get_session
 from bot.crypto import decrypt, encrypt
-from dashboard.api.deps import get_current_user, require_admin
+from dashboard.api.deps import get_current_user, get_user_id, require_admin
 
 router = APIRouter(
     prefix="/api/settings",
@@ -44,10 +44,10 @@ class TestConnectionRequest(BaseModel):
 # ── Schema (tells the frontend how to render forms) ────
 
 @router.get("/schema")
-async def get_settings_schema():
+async def get_settings_schema(user_id: int = Depends(get_user_id)):
     """Return the settings schema with field types, labels, and current values."""
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         db_values = await repo.get_decrypted_values(decrypt)
 
     result: dict[str, dict] = {}
@@ -70,13 +70,13 @@ async def get_settings_schema():
 # ── Get / Set by category ──────────────────────────────
 
 @router.get("/category/{category}")
-async def get_category(category: str):
+async def get_category(category: str, user_id: int = Depends(get_user_id)):
     """Get all settings for a category."""
     if category not in SETTINGS_SCHEMA:
         return {"error": f"Unknown category: {category}"}
 
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         db_values = await repo.get_decrypted_values(decrypt)
 
     fields = SETTINGS_SCHEMA[category]
@@ -93,7 +93,7 @@ async def get_category(category: str):
 
 
 @router.put("/category/{category}", dependencies=[Depends(require_admin)])
-async def update_category(category: str, body: CategoryUpdate):
+async def update_category(category: str, body: CategoryUpdate, user_id: int = Depends(get_user_id)):
     """Update all settings for a category at once."""
     if category not in SETTINGS_SCHEMA:
         return {"error": f"Unknown category: {category}"}
@@ -108,11 +108,11 @@ async def update_category(category: str, body: CategoryUpdate):
         return {"message": "No changes"}
 
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         count = await repo.bulk_set(to_save, SENSITIVE_KEYS, encrypt)
 
     # Tell the bot to reload
-    await _notify_reload()
+    await _notify_reload(user_id)
 
     return {"message": f"{count} setting(s) updated", "keys": list(to_save.keys())}
 
@@ -120,7 +120,7 @@ async def update_category(category: str, body: CategoryUpdate):
 # ── Individual setting ─────────────────────────────────
 
 @router.put("/", dependencies=[Depends(require_admin)])
-async def update_setting(body: SettingUpdate):
+async def update_setting(body: SettingUpdate, user_id: int = Depends(get_user_id)):
     """Update a single setting."""
     if body.key not in ALL_DB_KEYS:
         return {"error": f"Unknown setting: {body.key}"}
@@ -128,22 +128,22 @@ async def update_setting(body: SettingUpdate):
         return {"message": "No change (masked value)"}
 
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         is_sensitive = body.key in SENSITIVE_KEYS
         value = encrypt(body.value) if is_sensitive and body.value else body.value
         await repo.set(body.key, value, encrypted=is_sensitive)
 
-    await _notify_reload()
+    await _notify_reload(user_id)
     return {"message": f"Setting '{body.key}' updated"}
 
 
 # ── All settings (flat view) ──────────────────────────
 
 @router.get("/")
-async def list_settings():
+async def list_settings(user_id: int = Depends(get_user_id)):
     """List all settings with values (sensitive ones masked)."""
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         all_settings = await repo.get_all()
 
     safe: dict[str, str] = {}
@@ -158,10 +158,10 @@ async def list_settings():
 # ── Configuration status ──────────────────────────────
 
 @router.get("/status")
-async def settings_status():
+async def settings_status(user_id: int = Depends(get_user_id)):
     """Check if the bot is properly configured."""
     async with get_session() as session:
-        repo = SettingsRepository(session)
+        repo = SettingsRepository(session, user_id=user_id)
         db_values = await repo.get_decrypted_values(decrypt)
 
     has_api_key = bool(db_values.get("kraken_api_key"))
@@ -215,16 +215,19 @@ async def test_kraken_connection(body: TestConnectionRequest):
 # ── Reload bot settings ───────────────────────────────
 
 @router.post("/reload", dependencies=[Depends(require_admin)])
-async def reload_settings():
+async def reload_settings(user_id: int = Depends(get_user_id)):
     """Tell the bot to reload settings from DB."""
-    await _notify_reload()
+    await _notify_reload(user_id)
     return {"message": "Reload command sent"}
 
 
-async def _notify_reload() -> None:
+async def _notify_reload(user_id: int | None = None) -> None:
     """Send reload_settings command to bot via Redis."""
     try:
         r = aioredis.from_url(settings.redis_url)
+        # Send on user-specific channel and global channel
+        if user_id:
+            await r.publish(f"bot:user:{user_id}:commands", "reload_settings")
         await r.publish("bot:commands", "reload_settings")
         await r.close()
     except Exception:

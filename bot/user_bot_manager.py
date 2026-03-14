@@ -1,0 +1,625 @@
+"""Multi-tenant bot manager – one UserBotContext per configured user."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any
+
+import redis.asyncio as aioredis
+import structlog
+
+from bot.config import UserSettings, settings, SENSITIVE_KEYS
+from bot.db.models import AdminUser
+from bot.db.repository import SettingsRepository
+from bot.db.session import get_session, init_db, close_db
+
+logger = structlog.get_logger(__name__)
+
+
+async def _load_user_settings(user_id: int) -> UserSettings:
+    """Load a UserSettings instance from the database."""
+    from bot.crypto import decrypt
+
+    us = UserSettings(user_id)
+    try:
+        async with get_session() as session:
+            repo = SettingsRepository(session, user_id=user_id)
+            db_values = await repo.get_decrypted_values(decrypt)
+        if db_values:
+            us.apply_db_overrides(db_values)
+            logger.info("user_settings_loaded", user_id=user_id, keys=list(db_values.keys()))
+    except Exception as exc:
+        logger.warning("user_settings_load_error", user_id=user_id, error=str(exc))
+    return us
+
+
+class UserBotContext:
+    """All trading components scoped to a single user."""
+
+    def __init__(self, user_id: int, user_settings: UserSettings, redis_client: aioredis.Redis | None) -> None:
+        from bot.autopilot.manager import AutopilotManager
+        from bot.broker.kraken_rest import KrakenRestClient
+        from bot.broker.kraken_ws import KrakenWSClient
+        from bot.broker.paper_broker import PaperBroker
+        from bot.data.historical import HistoricalDataManager
+        from bot.ai.analyzer import ClaudeAnalyzer
+        from bot.risk.manager import RiskManager
+        from bot.risk.trailing_stop import TrailingStopManager
+        from bot.strategies.registry import StrategyRegistry
+
+        self.user_id = user_id
+        self.cfg = user_settings
+        self._redis = redis_client
+        self._running = False
+
+        # Broker
+        if self.cfg.bot_paper_trading:
+            logger.info("user_bot_mode", user_id=user_id, mode="PAPER")
+            self.broker = PaperBroker()
+        else:
+            logger.info("user_bot_mode", user_id=user_id, mode="LIVE")
+            self.broker = KrakenRestClient(
+                api_key=self.cfg.kraken_api_key,
+                api_secret=self.cfg.kraken_api_secret,
+            )
+
+        self.ws_client = KrakenWSClient()
+        self.data_mgr = HistoricalDataManager(self.broker)
+        self.strategy_registry = StrategyRegistry()
+        self.risk_manager = RiskManager()
+        self.trailing_stop_mgr = TrailingStopManager()
+        self.ai_analyzer = ClaudeAnalyzer()
+        self.autopilot: AutopilotManager | None = None
+
+        self._active_pairs: set[str] = set()
+
+    # ── Redis helpers (namespaced) ──────────────────────
+
+    def _rkey(self, key: str) -> str:
+        return f"bot:user:{self.user_id}:{key}"
+
+    async def publish_log(self, level: str, event: str, **kwargs: Any) -> None:
+        entry = {
+            "timestamp": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(),
+            "level": level,
+            "event": event,
+            "user_id": self.user_id,
+            **{k: str(v) for k, v in kwargs.items()},
+        }
+        if self._redis:
+            try:
+                payload = json.dumps(entry)
+                await self._redis.publish(self._rkey("logs"), payload)
+                # Also publish on the global channel so legacy dashboard still works
+                await self._redis.publish("bot:logs", payload)
+                await self._redis.lpush(self._rkey("logs:history"), payload)
+                await self._redis.ltrim(self._rkey("logs:history"), 0, 499)
+                # Legacy key (backwards compat)
+                await self._redis.lpush("bot:logs:history", payload)
+                await self._redis.ltrim("bot:logs:history", 0, 499)
+            except Exception:
+                pass
+
+    # ── Lifecycle ──────────────────────────────────────
+
+    async def start(self) -> None:
+        from bot.autopilot.manager import AutopilotManager
+
+        if not self.cfg.is_configured:
+            logger.warning("user_not_configured", user_id=self.user_id)
+            return
+
+        await self.broker.connect()
+
+        self.strategy_registry.load_defaults()
+
+        self.autopilot = AutopilotManager(
+            self.broker,
+            self.ws_client,
+            self.data_mgr,
+            self.strategy_registry,
+            redis_client=self._redis,
+            user_id=self.user_id,
+        )
+        self.autopilot.enabled = self.cfg.autopilot_enabled
+
+        self.ws_client.set_tick_callback(self._on_tick)
+
+        await self.ws_client.connect()
+
+        default_pairs = ["BTC/USD", "ETH/USD", "SOL/USD"]
+        await self.ws_client.subscribe_ticker(default_pairs)
+        self._active_pairs.update(default_pairs)
+
+        for pair in default_pairs:
+            try:
+                from bot.data.indicators import add_all_indicators
+                df = await self.data_mgr.get_bars(pair, interval_minutes=60, count=250)
+                if not df.empty:
+                    add_all_indicators(df)
+            except Exception as exc:
+                logger.warning("warmup_error", user_id=self.user_id, pair=pair, error=str(exc))
+
+        self._running = True
+        mode = "PAPER" if self.cfg.bot_paper_trading else "LIVE"
+        logger.info("user_bot_started", user_id=self.user_id, mode=mode, pairs=list(self._active_pairs))
+        await self.publish_log("INFO", "bot_started", mode=mode, pairs=str(list(self._active_pairs)))
+
+    async def run_loops(self) -> None:
+        """Run background loops. Call after start()."""
+        results = await asyncio.gather(
+            self._bar_update_loop(),
+            self._account_metrics_loop(),
+            self._autopilot_loop(),
+            self._redis_command_listener(),
+            return_exceptions=True,
+        )
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener"]
+        for name, result in zip(task_names, results):
+            if isinstance(result, Exception):
+                logger.error("user_task_crashed", user_id=self.user_id, task=name, error=str(result))
+
+    async def stop(self) -> None:
+        self._running = False
+        await self.ws_client.disconnect()
+        await self.broker.disconnect()
+        await self.ai_analyzer.close()
+        logger.info("user_bot_stopped", user_id=self.user_id)
+
+    # ── Reload settings ────────────────────────────────
+
+    async def reload_settings(self) -> None:
+        self.cfg = await _load_user_settings(self.user_id)
+        self.risk_manager.max_daily_loss = self.cfg.bot_max_daily_loss
+        self.risk_manager.max_position_size = self.cfg.bot_max_position_size
+        self.risk_manager.max_open_positions = self.cfg.bot_max_open_positions
+        self.risk_manager.max_per_pair = self.cfg.bot_max_per_pair
+        self.risk_manager.risk_per_trade_pct = self.cfg.bot_risk_per_trade_pct
+        if self.autopilot:
+            self.autopilot.enabled = self.cfg.autopilot_enabled
+            self.autopilot.shadow_mode = self.cfg.autopilot_shadow_mode
+            self.autopilot.max_active = self.cfg.autopilot_max_active
+            self.autopilot.min_score = self.cfg.autopilot_min_score
+        logger.info("user_settings_reloaded", user_id=self.user_id)
+
+    # ── Tick / signal processing (delegated from TradingBot logic) ─
+
+    async def _on_tick(self, tick) -> None:
+        from bot.metrics import tick_counter
+        tick_counter.inc()
+        triggered = self.trailing_stop_mgr.update_on_tick(tick)
+        for order_id in triggered:
+            await self._close_on_trailing_stop(order_id, tick)
+        signals = self.strategy_registry.dispatch_tick(tick)
+        for signal in signals:
+            await self._process_signal(signal)
+
+    async def _process_signal(self, signal) -> None:
+        import time as _time
+        from bot.broker.models import OrderRequest
+        from bot.ai.models import AIVerdict
+        from bot.db.repository import TradeRepository, SignalRepository
+        from bot.metrics import (
+            orders_placed_counter, orders_rejected_counter,
+            signals_generated_counter, order_latency_histogram,
+        )
+        from bot.notifications import notify_error, notify_trade_opened
+        from bot.risk.trailing_stop import TrailingStopState
+
+        signals_generated_counter.labels(
+            strategy=signal.strategy_name, signal_type=signal.signal_type.value
+        ).inc()
+
+        from bot.strategies.base import SignalType
+        if signal.signal_type == SignalType.HOLD:
+            return
+
+        positions = await self.broker.get_open_positions()
+        balance = await self.broker.get_account_balance()
+        check = self.risk_manager.check_signal(signal, positions, balance)
+        if not check.allowed:
+            orders_rejected_counter.labels(reason=check.reason).inc()
+            await self.publish_log("INFO", "signal_rejected", pair=signal.pair, reason=check.reason)
+            return
+
+        is_autopilot = signal.strategy_name.startswith("ap_")
+        if is_autopilot and self.cfg.autopilot_shadow_mode:
+            await self._log_shadow_trade(signal)
+            return
+
+        # AI validation
+        ai_result = None
+        if self.ai_analyzer.is_enabled and self.cfg.ai_pre_trade_enabled:
+            ai_result = await self._run_ai_validation(signal, positions, balance)
+            if ai_result and ai_result.verdict == AIVerdict.REJECT:
+                orders_rejected_counter.labels(reason="ai_rejected").inc()
+                return
+            if ai_result and ai_result.verdict == AIVerdict.ADJUST:
+                adj = ai_result.suggested_adjustments
+                if adj.get("stop_loss_pct") is not None:
+                    signal.stop_loss_pct = float(adj["stop_loss_pct"])
+                if adj.get("take_profit_pct") is not None:
+                    signal.take_profit_pct = float(adj["take_profit_pct"])
+
+        ticker = await self.broker.get_ticker(signal.pair)
+        size = self.risk_manager.calculate_position_size(signal, balance, ticker.last)
+        if ai_result and ai_result.suggested_adjustments.get("size_factor") is not None:
+            size *= float(ai_result.suggested_adjustments["size_factor"])
+        if size <= 0:
+            return
+
+        order = OrderRequest(
+            pair=signal.pair, direction=signal.direction, size=size,
+            stop_loss_pct=signal.stop_loss_pct, take_profit_pct=signal.take_profit_pct,
+            metadata=signal.metadata,
+        )
+        t0 = _time.monotonic()
+        try:
+            result = await self.broker.open_position(order)
+        except Exception as exc:
+            await self.publish_log("ERROR", "order_error", pair=signal.pair, error=str(exc))
+            await notify_error(f"Order failed: {exc}")
+            return
+
+        latency = _time.monotonic() - t0
+        order_latency_histogram.observe(latency)
+        orders_placed_counter.labels(
+            strategy=signal.strategy_name, direction=signal.direction.value, pair=signal.pair
+        ).inc()
+
+        trade_status = "PAPER" if self.cfg.bot_paper_trading else None
+        async with get_session() as session:
+            repo = TradeRepository(session, user_id=self.user_id)
+            await repo.create_trade(
+                order_id=result.order_id, pair=signal.pair,
+                direction=signal.direction.value, size=size,
+                entry_price=result.price,
+                stop_loss=(result.price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
+                take_profit=(result.price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
+                fee=result.fee, strategy=signal.strategy_name,
+                metadata_=signal.metadata,
+                **({"status": trade_status} if trade_status else {}),
+            )
+            sig_repo = SignalRepository(session, user_id=self.user_id)
+            await sig_repo.log_signal(
+                pair=signal.pair, strategy=signal.strategy_name,
+                signal_type=signal.signal_type.value, confidence=signal.confidence,
+                indicators=signal.metadata, executed=True, order_id=result.order_id,
+            )
+
+        if signal.stop_loss_pct:
+            self.trailing_stop_mgr.register(
+                TrailingStopState(
+                    pair=signal.pair, direction=signal.direction,
+                    entry_price=result.price, trail_pct=signal.stop_loss_pct,
+                    order_id=result.order_id,
+                )
+            )
+
+        if self._redis:
+            try:
+                await self._redis.publish(
+                    self._rkey("trades"),
+                    json.dumps({
+                        "type": "trade_opened", "pair": signal.pair,
+                        "direction": signal.direction.value, "price": result.price,
+                        "size": size, "strategy": signal.strategy_name,
+                    }),
+                )
+            except Exception:
+                pass
+
+        await notify_trade_opened(
+            pair=signal.pair, direction=signal.direction.value,
+            size=size, price=result.price, strategy=signal.strategy_name,
+        )
+        await self.publish_log(
+            "INFO", "trade_opened", pair=signal.pair,
+            direction=signal.direction.value, size=size,
+            price=result.price, strategy=signal.strategy_name,
+        )
+
+    async def _close_on_trailing_stop(self, order_id: str, tick) -> None:
+        from bot.broker.models import Direction
+        from bot.db.repository import TradeRepository
+
+        stop = self.trailing_stop_mgr.get_stop(order_id)
+        if not stop:
+            return
+        try:
+            result = await self.broker.close_position(order_id=order_id, pair=stop.pair, size=0)
+            self.trailing_stop_mgr.unregister(order_id)
+            profit = (tick.last - stop.entry_price) * result.size if stop.direction == Direction.BUY else (stop.entry_price - tick.last) * result.size
+            self.risk_manager.update_daily_pnl(profit)
+            async with get_session() as session:
+                repo = TradeRepository(session, user_id=self.user_id)
+                await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
+            await self.publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
+        except Exception as exc:
+            logger.error("trailing_stop_close_error", user_id=self.user_id, order_id=order_id, error=str(exc))
+
+    async def _log_shadow_trade(self, signal) -> None:
+        import time as _time
+        from bot.db.repository import TradeRepository
+
+        async with get_session() as session:
+            repo = TradeRepository(session, user_id=self.user_id)
+            ticker = await self.broker.get_ticker(signal.pair)
+            await repo.create_trade(
+                order_id=f"shadow_{signal.pair}_{int(_time.time())}",
+                pair=signal.pair, direction=signal.direction.value,
+                size=0.0, entry_price=ticker.last,
+                strategy=signal.strategy_name, status="SHADOW",
+                metadata_=signal.metadata,
+            )
+
+    async def _run_ai_validation(self, signal, positions, balance):
+        from bot.db.repository import AIAnalysisRepository
+        from bot.data.indicators import add_all_indicators
+
+        try:
+            cached_df = self.data_mgr.get_cached(signal.pair, 60)
+            recent_bars = []
+            if cached_df is not None and not cached_df.empty:
+                for _, row in cached_df.tail(10).iterrows():
+                    recent_bars.append({
+                        "open": row["open"], "high": row["high"],
+                        "low": row["low"], "close": row["close"], "volume": row["volume"],
+                    })
+            pos_dicts = [
+                {"pair": p.pair, "direction": p.direction.value, "size": p.size, "entry_price": p.entry_price}
+                for p in positions
+            ]
+            ai_result = await self.ai_analyzer.validate_signal(
+                pair=signal.pair, direction=signal.direction.value,
+                strategy=signal.strategy_name, confidence=signal.confidence,
+                indicators=signal.metadata, recent_bars=recent_bars,
+                open_positions=pos_dicts, account_balance=balance.available_balance,
+            )
+            async with get_session() as session:
+                ai_repo = AIAnalysisRepository(session, user_id=self.user_id)
+                await ai_repo.save(
+                    pair=signal.pair, mode="pre_trade",
+                    verdict=ai_result.verdict.value, confidence=ai_result.confidence,
+                    reasoning=ai_result.reasoning, market_summary=ai_result.market_summary,
+                    risk_warnings=ai_result.risk_warnings,
+                    suggested_adjustments=ai_result.suggested_adjustments,
+                    signal_direction=signal.direction.value,
+                    signal_strategy=signal.strategy_name,
+                    model_used=ai_result.model_used,
+                    tokens_used=ai_result.tokens_used, latency_ms=ai_result.latency_ms,
+                )
+            return ai_result
+        except Exception as exc:
+            logger.error("ai_validation_error", user_id=self.user_id, error=str(exc))
+            return None
+
+    # ── Background loops ───────────────────────────────
+
+    async def _bar_update_loop(self) -> None:
+        import pandas as pd
+        from bot.data.indicators import add_all_indicators
+
+        while self._running:
+            await asyncio.sleep(300)
+            if not self.cfg.is_configured:
+                continue
+            for pair in list(self._active_pairs):
+                try:
+                    df = await self.data_mgr.get_bars(pair, interval_minutes=60, count=250)
+                    if df.empty:
+                        continue
+                    df = add_all_indicators(df)
+                    df_d1 = None
+                    try:
+                        df_d1 = await self.data_mgr.get_bars(pair, interval_minutes=1440, count=100)
+                        if df_d1 is not None and not df_d1.empty:
+                            df_d1 = add_all_indicators(df_d1)
+                        else:
+                            df_d1 = None
+                    except Exception:
+                        df_d1 = None
+                    if df_d1 is not None:
+                        signals = self.strategy_registry.dispatch_bar_mtf(pair, df, df_d1)
+                    else:
+                        signals = self.strategy_registry.dispatch_bar(pair, df)
+                    for signal in signals:
+                        await self._process_signal(signal)
+                except Exception as exc:
+                    logger.error("bar_update_error", user_id=self.user_id, pair=pair, error=str(exc))
+
+    async def _account_metrics_loop(self) -> None:
+        from bot.metrics import account_balance_gauge, daily_pnl_gauge, open_positions_gauge
+
+        while self._running:
+            await asyncio.sleep(60)
+            if not self.cfg.is_configured:
+                continue
+            try:
+                balance = await self.broker.get_account_balance()
+                account_balance_gauge.set(balance.total_balance)
+                daily_pnl_gauge.set(self.risk_manager.state.daily_pnl)
+                positions = await self.broker.get_open_positions()
+                open_positions_gauge.set(len(positions))
+                if self._redis:
+                    balance_data = {
+                        "total_balance": balance.total_balance,
+                        "available_balance": balance.available_balance,
+                        "currency": balance.currency,
+                        "open_positions": len(positions),
+                        "positions": [
+                            {
+                                "pair": p.pair,
+                                "direction": p.direction.value if hasattr(p.direction, "value") else str(p.direction),
+                                "size": p.size, "entry_price": p.entry_price,
+                                "unrealized_pnl": getattr(p, "unrealized_pnl", 0.0),
+                            }
+                            for p in positions
+                        ],
+                        "mode": "PAPER" if self.cfg.bot_paper_trading else "LIVE",
+                    }
+                    await self._redis.set(self._rkey("last_balance"), json.dumps(balance_data))
+                    # Legacy key for backwards compat
+                    await self._redis.set("bot:last_balance", json.dumps(balance_data))
+            except Exception as exc:
+                logger.error("metrics_error", user_id=self.user_id, error=str(exc))
+
+    async def _autopilot_loop(self) -> None:
+        if not self.autopilot:
+            return
+        while self._running:
+            try:
+                await self._autopilot_loop_inner()
+            except Exception as exc:
+                logger.error("autopilot_loop_crashed", user_id=self.user_id, error=str(exc))
+                await asyncio.sleep(30)
+
+    async def _autopilot_loop_inner(self) -> None:
+        first_run = True
+        while self._running:
+            if first_run:
+                first_run = False
+                await asyncio.sleep(15)
+            else:
+                interval = self.cfg.autopilot_scan_interval_minutes * 60
+                await asyncio.sleep(interval)
+            if not self.cfg.is_configured or not self.autopilot.enabled:
+                continue
+            try:
+                await self.publish_log("INFO", "autopilot_cycle_start", status="scanning")
+                results = await self.autopilot.run_scan_cycle()
+                active = self.autopilot.active_scores
+                if results:
+                    top_pairs = ", ".join(f"{s.pair}({s.composite:.0%})" for s in results[:5])
+                    await self.publish_log(
+                        "INFO", "autopilot_scan_done",
+                        scanned=str(len(results)), active=str(len(active)), top=top_pairs,
+                    )
+                else:
+                    await self.publish_log("WARNING", "autopilot_no_results", msg="No pairs above threshold")
+                for pair, score in active.items():
+                    await self.publish_log(
+                        "DEBUG", "autopilot_pair_active", pair=pair,
+                        score=f"{score.composite:.0%}", regime=score.regime,
+                        direction=score.direction_bias, strategy=score.recommended_strategy or "auto",
+                    )
+            except Exception as exc:
+                logger.error("autopilot_error", user_id=self.user_id, error=str(exc))
+                try:
+                    await self.publish_log("ERROR", "autopilot_error", error=str(exc))
+                except Exception:
+                    pass
+
+    async def _redis_command_listener(self) -> None:
+        if not self._redis:
+            return
+        try:
+            pubsub = self._redis.pubsub()
+            # Listen on user-specific AND global channel
+            await pubsub.subscribe(self._rkey("commands"), "bot:commands")
+            while self._running:
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if msg and msg["type"] == "message":
+                    await self._handle_command(msg["data"].decode())
+        except Exception as exc:
+            logger.error("redis_listener_error", user_id=self.user_id, error=str(exc))
+
+    async def _handle_command(self, command: str) -> None:
+        logger.info("command_received", user_id=self.user_id, command=command)
+        if command == "stop":
+            self._running = False
+        elif command == "reload_settings":
+            await self.reload_settings()
+        elif command == "autopilot_scan_now":
+            if self.autopilot:
+                await self.autopilot.run_scan_cycle()
+        elif command == "daily_reset":
+            self.risk_manager.reset_daily()
+
+
+class UserBotManager:
+    """Manages N UserBotContext instances – one per configured user."""
+
+    def __init__(self) -> None:
+        self.contexts: dict[int, UserBotContext] = {}
+        self._redis: aioredis.Redis | None = None
+
+    async def start(self) -> None:
+        logger.info("user_bot_manager_starting")
+
+        await init_db()
+
+        # Connect Redis
+        try:
+            self._redis = aioredis.from_url(settings.redis_url)
+            await self._redis.ping()
+            logger.info("redis_connected")
+        except Exception as exc:
+            logger.warning("redis_unavailable", error=str(exc))
+            self._redis = None
+
+        # Prometheus metrics
+        from bot.metrics import start_metrics_server
+        try:
+            start_metrics_server(port=8001)
+        except Exception:
+            pass
+
+        # Discover configured users
+        from sqlalchemy import select
+        async with get_session() as session:
+            result = await session.execute(select(AdminUser))
+            users = list(result.scalars().all())
+
+        if not users:
+            logger.warning("no_users_found", msg="No admin users in DB. Waiting for first login.")
+            # Still keep running so the dashboard is accessible
+            # Fall back to legacy single-bot mode using global settings
+            await self._run_legacy_single_bot()
+            return
+
+        logger.info("users_discovered", count=len(users), users=[u.username for u in users])
+
+        # Create a context per user
+        tasks = []
+        for user in users:
+            user_settings = await _load_user_settings(user.id)
+            ctx = UserBotContext(user.id, user_settings, self._redis)
+            self.contexts[user.id] = ctx
+            try:
+                await ctx.start()
+                tasks.append(ctx.run_loops())
+            except Exception as exc:
+                logger.error("user_bot_start_error", user_id=user.id, error=str(exc))
+
+        if tasks:
+            from bot.notifications import notify_bot_status
+            mode_summary = ", ".join(
+                f"user:{uid}({'PAPER' if ctx.cfg.bot_paper_trading else 'LIVE'})"
+                for uid, ctx in self.contexts.items()
+            )
+            await notify_bot_status(f"Multi-tenant bot started: {mode_summary}")
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_legacy_single_bot(self) -> None:
+        """Fallback: run the old single-bot when no users exist yet."""
+        from bot.main import TradingBot
+        bot = TradingBot()
+        try:
+            await bot.start()
+        finally:
+            await bot.stop()
+
+    async def stop(self) -> None:
+        for uid, ctx in self.contexts.items():
+            try:
+                await ctx.stop()
+            except Exception as exc:
+                logger.error("user_bot_stop_error", user_id=uid, error=str(exc))
+        if self._redis:
+            await self._redis.close()
+        await close_db()
+        logger.info("user_bot_manager_stopped")

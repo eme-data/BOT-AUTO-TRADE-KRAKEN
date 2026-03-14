@@ -35,3 +35,14 @@ def require_role(*roles: str):
 
 require_admin = require_role("admin")
 require_editor = require_role("admin", "editor")
+
+
+async def get_user_id(user: dict = Depends(get_current_user)) -> int:
+    """Extract user_id from JWT payload."""
+    uid = user.get("user_id")
+    if uid is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing user_id – please re-login",
+        )
+    return int(uid)

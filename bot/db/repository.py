@@ -21,10 +21,18 @@ from bot.db.models import (
 
 
 class TradeRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
+
+    def _user_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(Trade.user_id == self.user_id)
+        return stmt
 
     async def create_trade(self, **kwargs: Any) -> Trade:
+        if self.user_id is not None:
+            kwargs.setdefault("user_id", self.user_id)
         trade = Trade(**kwargs)
         self.session.add(trade)
         await self.session.flush()
@@ -33,7 +41,7 @@ class TradeRepository:
     async def close_trade(
         self, order_id: str, exit_price: float, profit: float, fee: float = 0.0
     ) -> None:
-        await self.session.execute(
+        stmt = (
             update(Trade)
             .where(Trade.order_id == order_id)
             .values(
@@ -44,42 +52,48 @@ class TradeRepository:
                 closed_at=datetime.now(timezone.utc),
             )
         )
+        if self.user_id is not None:
+            stmt = stmt.where(Trade.user_id == self.user_id)
+        await self.session.execute(stmt)
 
     async def get_open_trades(self) -> list[Trade]:
-        result = await self.session.execute(
-            select(Trade).where(Trade.status == "OPEN").order_by(Trade.opened_at)
-        )
+        stmt = select(Trade).where(Trade.status == "OPEN").order_by(Trade.opened_at)
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def get_recent_trades(self, limit: int = 50) -> list[Trade]:
-        result = await self.session.execute(
-            select(Trade).order_by(Trade.opened_at.desc()).limit(limit)
-        )
+        stmt = select(Trade).order_by(Trade.opened_at.desc()).limit(limit)
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def get_trades_since(self, since: datetime) -> list[Trade]:
-        result = await self.session.execute(
+        stmt = (
             select(Trade)
             .where(Trade.opened_at >= since)
             .order_by(Trade.opened_at.desc())
         )
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def get_daily_pnl(self, date: datetime) -> float:
-        result = await self.session.execute(
+        stmt = (
             select(Trade.profit)
             .where(Trade.status == "CLOSED")
             .where(Trade.closed_at >= date)
         )
+        result = await self.session.execute(self._user_filter(stmt))
         profits = result.scalars().all()
         return sum(p for p in profits if p is not None)
 
 
 class SignalRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
 
     async def log_signal(self, **kwargs: Any) -> SignalLog:
+        if self.user_id is not None:
+            kwargs.setdefault("user_id", self.user_id)
         sig = SignalLog(**kwargs)
         self.session.add(sig)
         await self.session.flush()
@@ -87,42 +101,47 @@ class SignalRepository:
 
 
 class SettingsRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
+
+    def _base_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(AppSetting.user_id == self.user_id)
+        return stmt.where(AppSetting.user_id.is_(None))
 
     async def get(self, key: str) -> str | None:
-        result = await self.session.execute(
-            select(AppSetting.value).where(AppSetting.key == key)
-        )
+        stmt = select(AppSetting.value).where(AppSetting.key == key)
+        result = await self.session.execute(self._base_filter(stmt))
         return result.scalar_one_or_none()
 
     async def get_with_meta(self, key: str) -> AppSetting | None:
-        result = await self.session.execute(
-            select(AppSetting).where(AppSetting.key == key)
-        )
+        stmt = select(AppSetting).where(AppSetting.key == key)
+        result = await self.session.execute(self._base_filter(stmt))
         return result.scalar_one_or_none()
 
     async def set(self, key: str, value: str, encrypted: bool = False) -> None:
-        existing = await self.session.execute(
-            select(AppSetting).where(AppSetting.key == key)
-        )
+        stmt = select(AppSetting).where(AppSetting.key == key)
+        existing = await self.session.execute(self._base_filter(stmt))
         row = existing.scalar_one_or_none()
         if row:
             row.value = value
             row.encrypted = encrypted
         else:
             self.session.add(
-                AppSetting(key=key, value=value, encrypted=encrypted)
+                AppSetting(
+                    key=key, value=value, encrypted=encrypted, user_id=self.user_id
+                )
             )
 
     async def get_all(self) -> dict[str, str]:
-        result = await self.session.execute(select(AppSetting))
+        result = await self.session.execute(self._base_filter(select(AppSetting)))
         return {
             row.key: row.value for row in result.scalars().all() if row.value
         }
 
     async def get_all_with_meta(self) -> list[AppSetting]:
-        result = await self.session.execute(select(AppSetting))
+        result = await self.session.execute(self._base_filter(select(AppSetting)))
         return list(result.scalars().all())
 
     async def get_decrypted_values(self, decrypt_fn) -> dict[str, str]:
@@ -155,21 +174,25 @@ class SettingsRepository:
 
 
 class StrategyRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
+
+    def _user_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(StrategyState.user_id == self.user_id)
+        return stmt
 
     async def get_enabled(self) -> list[StrategyState]:
-        result = await self.session.execute(
-            select(StrategyState).where(StrategyState.enabled.is_(True))
-        )
+        stmt = select(StrategyState).where(StrategyState.enabled.is_(True))
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def save_state(
         self, name: str, enabled: bool, config: dict | None, state: dict | None
     ) -> None:
-        existing = await self.session.execute(
-            select(StrategyState).where(StrategyState.name == name)
-        )
+        stmt = select(StrategyState).where(StrategyState.name == name)
+        existing = await self.session.execute(self._user_filter(stmt))
         row = existing.scalar_one_or_none()
         if row:
             row.enabled = enabled
@@ -177,54 +200,73 @@ class StrategyRepository:
             row.state = state
         else:
             self.session.add(
-                StrategyState(name=name, enabled=enabled, config=config, state=state)
+                StrategyState(
+                    name=name, enabled=enabled, config=config,
+                    state=state, user_id=self.user_id,
+                )
             )
 
 
 class WatchlistRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
+
+    def _user_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(WatchedMarket.user_id == self.user_id)
+        return stmt
 
     async def get_active(self) -> list[WatchedMarket]:
-        result = await self.session.execute(
-            select(WatchedMarket).where(WatchedMarket.active.is_(True))
-        )
+        stmt = select(WatchedMarket).where(WatchedMarket.active.is_(True))
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def add(self, pair: str) -> None:
-        self.session.add(WatchedMarket(pair=pair))
+        self.session.add(WatchedMarket(pair=pair, user_id=self.user_id))
 
     async def remove(self, pair: str) -> None:
-        await self.session.execute(
-            delete(WatchedMarket).where(WatchedMarket.pair == pair)
-        )
+        stmt = delete(WatchedMarket).where(WatchedMarket.pair == pair)
+        if self.user_id is not None:
+            stmt = stmt.where(WatchedMarket.user_id == self.user_id)
+        await self.session.execute(stmt)
 
 
 class AIAnalysisRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
         self.session = session
+        self.user_id = user_id
+
+    def _user_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(AIAnalysisLog.user_id == self.user_id)
+        return stmt
 
     async def save(self, **kwargs: Any) -> AIAnalysisLog:
+        if self.user_id is not None:
+            kwargs.setdefault("user_id", self.user_id)
         log = AIAnalysisLog(**kwargs)
         self.session.add(log)
         await self.session.flush()
         return log
 
     async def get_recent(self, limit: int = 50) -> list[AIAnalysisLog]:
-        result = await self.session.execute(
+        stmt = (
             select(AIAnalysisLog)
             .order_by(AIAnalysisLog.created_at.desc())
             .limit(limit)
         )
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def get_by_pair(self, pair: str, limit: int = 20) -> list[AIAnalysisLog]:
-        result = await self.session.execute(
+        stmt = (
             select(AIAnalysisLog)
             .where(AIAnalysisLog.pair == pair)
             .order_by(AIAnalysisLog.created_at.desc())
             .limit(limit)
         )
+        result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
     async def get_stats(self) -> dict[str, Any]:

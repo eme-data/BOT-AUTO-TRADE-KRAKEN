@@ -206,3 +206,99 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class UserSettings:
+    """Per-user trading settings loaded from the database.
+
+    Infrastructure settings (DB, Redis, ports) come from the global
+    ``settings`` singleton.  Everything else is loaded per-user from
+    the ``app_settings`` table filtered by ``user_id``.
+    """
+
+    # Defaults mirrored from Settings class / SETTINGS_SCHEMA
+    _DEFAULTS: dict[str, Any] = {
+        "kraken_api_key": "",
+        "kraken_api_secret": "",
+        "kraken_acc_type": "DEMO",
+        "bot_max_daily_loss": -500.0,
+        "bot_max_position_size": 1.0,
+        "bot_max_open_positions": 5,
+        "bot_max_per_pair": 1,
+        "bot_risk_per_trade_pct": 2.0,
+        "bot_default_stop_pct": 3.0,
+        "bot_default_limit_pct": 6.0,
+        "bot_paper_trading": True,
+        "autopilot_enabled": False,
+        "autopilot_shadow_mode": True,
+        "autopilot_scan_interval_minutes": 30,
+        "autopilot_max_active": 3,
+        "autopilot_min_score": 0.55,
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "discord_webhook_url": "",
+        "discord_enabled": False,
+        "ai_enabled": False,
+        "ai_api_key": "",
+        "ai_model": "claude-sonnet-4-6",
+        "ai_max_tokens": 1024,
+        "ai_pre_trade_enabled": True,
+        "ai_market_review_enabled": False,
+        "ai_sentiment_enabled": False,
+        "ai_post_trade_enabled": False,
+        "ai_min_confidence": 0.5,
+    }
+
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        self._values: dict[str, Any] = dict(self._DEFAULTS)
+
+    # ── Attribute access (dynamic) ──────────────────────
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_") or name == "user_id":
+            raise AttributeError(name)
+        try:
+            return self._values[name]
+        except KeyError:
+            # Fall through to global settings for infra keys
+            return getattr(settings, name)
+
+    # ── Load from DB ────────────────────────────────────
+    def apply_db_overrides(self, db_values: dict[str, str]) -> None:
+        """Apply user-specific settings from the database."""
+        for key, raw_value in db_values.items():
+            if key not in self._DEFAULTS:
+                continue
+            default = self._DEFAULTS[key]
+            try:
+                if isinstance(default, bool):
+                    self._values[key] = raw_value.lower() in ("true", "1", "yes", "on")
+                elif isinstance(default, int):
+                    self._values[key] = int(float(raw_value))
+                elif isinstance(default, float):
+                    self._values[key] = float(raw_value)
+                else:
+                    self._values[key] = raw_value
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "user_config_coerce_error",
+                    user_id=self.user_id, key=key, error=str(exc),
+                )
+
+    @property
+    def is_configured(self) -> bool:
+        if self._values.get("bot_paper_trading"):
+            return True
+        return bool(
+            self._values.get("kraken_api_key")
+            and self._values.get("kraken_api_secret")
+        )
+
+    # Infrastructure (delegated to global)
+    @property
+    def database_url(self) -> str:
+        return settings.database_url
+
+    @property
+    def redis_url(self) -> str:
+        return settings.redis_url

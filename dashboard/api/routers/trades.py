@@ -23,7 +23,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 from bot.db.repository import TradeRepository
 from bot.db.session import get_session
-from dashboard.api.deps import get_current_user
+from dashboard.api.deps import get_current_user, get_user_id
 
 router = APIRouter(
     prefix="/api/trades",
@@ -50,10 +50,10 @@ def _trade_dict(t):
     }
 
 
-async def _fetch_trades(days: Optional[int] = None):
+async def _fetch_trades(user_id: int, days: Optional[int] = None):
     """Fetch trades filtered by number of days (None = all)."""
     async with get_session() as session:
-        repo = TradeRepository(session)
+        repo = TradeRepository(session, user_id=user_id)
         if days is not None and days > 0:
             since = datetime.now(timezone.utc) - timedelta(days=days)
             return await repo.get_trades_since(since)
@@ -95,17 +95,17 @@ def _compute_stats(trades):
 # ─── existing endpoints ─────────────────────────────────────────────
 
 @router.get("/")
-async def list_trades(limit: int = 50):
+async def list_trades(limit: int = 50, user_id: int = Depends(get_user_id)):
     async with get_session() as session:
-        repo = TradeRepository(session)
+        repo = TradeRepository(session, user_id=user_id)
         trades = await repo.get_recent_trades(limit=limit)
         return [_trade_dict(t) for t in trades]
 
 
 @router.get("/open")
-async def open_trades():
+async def open_trades(user_id: int = Depends(get_user_id)):
     async with get_session() as session:
-        repo = TradeRepository(session)
+        repo = TradeRepository(session, user_id=user_id)
         trades = await repo.get_open_trades()
         return [
             {
@@ -125,16 +125,16 @@ async def open_trades():
 # ─── stats endpoint ─────────────────────────────────────────────────
 
 @router.get("/stats")
-async def trade_stats(days: Optional[int] = Query(30)):
-    trades = await _fetch_trades(days)
+async def trade_stats(days: Optional[int] = Query(30), user_id: int = Depends(get_user_id)):
+    trades = await _fetch_trades(user_id, days)
     return _compute_stats(trades)
 
 
 # ─── CSV export ──────────────────────────────────────────────────────
 
 @router.get("/export/csv")
-async def export_csv(days: Optional[int] = Query(30)):
-    trades = await _fetch_trades(days)
+async def export_csv(days: Optional[int] = Query(30), user_id: int = Depends(get_user_id)):
+    trades = await _fetch_trades(user_id, days)
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -168,8 +168,8 @@ async def export_csv(days: Optional[int] = Query(30)):
 # ─── PDF export ──────────────────────────────────────────────────────
 
 @router.get("/export/pdf")
-async def export_pdf(days: Optional[int] = Query(30)):
-    trades = await _fetch_trades(days)
+async def export_pdf(days: Optional[int] = Query(30), user_id: int = Depends(get_user_id)):
+    trades = await _fetch_trades(user_id, days)
     stats = _compute_stats(trades)
 
     buf = io.BytesIO()
@@ -193,7 +193,7 @@ async def export_pdf(days: Optional[int] = Query(30)):
     elements = []
 
     # Title
-    elements.append(Paragraph("Trade Report &mdash; Kraken Bot", title_style))
+    elements.append(Paragraph("Trade Report &mdash; Altior Holding", title_style))
 
     # Date range
     now = datetime.now(timezone.utc)

@@ -112,8 +112,10 @@ def _auto_retry(max_retries: int = 3, delay: float = 5.0):
 class KrakenRestClient(AbstractBroker):
     """Kraken exchange client built on ccxt async."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None, api_secret: str | None = None) -> None:
         self._exchange: ccxt.kraken | None = None
+        self._api_key = api_key
+        self._api_secret = api_secret
         self.circuit_breaker = CircuitBreaker()
         self.rate_limiter = KrakenRateLimiter(max_tokens=15, refill_rate=1.0)
         self.matching_limiter = KrakenRateLimiter(max_tokens=60, refill_rate=1.0)
@@ -123,8 +125,8 @@ class KrakenRestClient(AbstractBroker):
     async def connect(self) -> None:
         self._exchange = ccxt.kraken(
             {
-                "apiKey": settings.kraken_api_key,
-                "secret": settings.kraken_api_secret,
+                "apiKey": self._api_key or settings.kraken_api_key,
+                "secret": self._api_secret or settings.kraken_api_secret,
                 "enableRateLimit": True,
                 "options": {"defaultType": "spot"},
             }
