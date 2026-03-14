@@ -199,7 +199,9 @@ class Settings(BaseSettings):
 
     @property
     def is_configured(self) -> bool:
-        """True if Kraken API credentials are set."""
+        """True if Kraken API credentials are set or paper trading is enabled."""
+        if self.bot_paper_trading:
+            return True
         return bool(self.kraken_api_key and self.kraken_api_secret)
 
 

@@ -5,9 +5,17 @@ from __future__ import annotations
 import structlog
 
 from bot.broker.kraken_rest import KrakenRestClient
+from bot.broker.paper_broker import PaperBroker
 from bot.autopilot.models import ScanResult
 
 logger = structlog.get_logger(__name__)
+
+
+def _get_real_broker(broker) -> KrakenRestClient:
+    """Extract the real KrakenRestClient from a broker (handles PaperBroker)."""
+    if isinstance(broker, PaperBroker):
+        return broker.real_broker
+    return broker
 
 # Default pairs to scan when in discovery mode
 DEFAULT_DISCOVERY_PAIRS: list[str] = [
@@ -36,8 +44,9 @@ ALLOWED_QUOTES = {"USD", "EUR", "USDT"}
 class MarketScanner:
     """Discovers and filters tradeable pairs on Kraken."""
 
-    def __init__(self, broker: KrakenRestClient) -> None:
+    def __init__(self, broker) -> None:
         self._broker = broker
+        self._real_broker = _get_real_broker(broker)
 
     async def scan_discovery(
         self, custom_pairs: list[str] | None = None
@@ -46,7 +55,7 @@ class MarketScanner:
         pairs_to_check = custom_pairs or DEFAULT_DISCOVERY_PAIRS
         results: list[ScanResult] = []
 
-        markets = self._broker.exchange.markets
+        markets = self._real_broker.exchange.markets
         for pair in pairs_to_check:
             market = markets.get(pair)
             if not market or not market.get("active"):
@@ -68,14 +77,14 @@ class MarketScanner:
 
     async def scan_by_volume(self, top_n: int = 20) -> list[ScanResult]:
         """Scan all active pairs and sort by 24h volume."""
-        all_pairs = await self._broker.get_tradeable_pairs()
+        all_pairs = await self._real_broker.get_tradeable_pairs()
         results: list[ScanResult] = []
 
         for info in all_pairs:
             if info["quote"] not in ALLOWED_QUOTES:
                 continue
             try:
-                ticker = await self._broker.get_ticker(info["symbol"])
+                ticker = await self._real_broker.get_ticker(info["symbol"])
                 results.append(
                     ScanResult(
                         pair=info["symbol"],
