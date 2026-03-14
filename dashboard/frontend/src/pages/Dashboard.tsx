@@ -461,17 +461,22 @@ export default function Dashboard({ token }: DashboardProps) {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {/* Toggle switch */}
             <button
               onClick={handleToggleAutopilot}
               disabled={autopilotToggling}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition ${
-                autopilotEnabled
-                  ? 'bg-green-600 hover:bg-green-700 text-white'
-                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-              } disabled:opacity-50`}
+              className="flex items-center gap-2.5 cursor-pointer disabled:opacity-50"
             >
-              <Power size={14} />
-              {autopilotToggling ? '...' : autopilotEnabled ? 'Active' : 'Desactive'}
+              <span className={`text-xs font-medium ${autopilotEnabled ? 'text-green-400' : 'text-gray-500'}`}>
+                {autopilotEnabled ? 'ON' : 'OFF'}
+              </span>
+              <div className={`relative w-11 h-6 rounded-full transition-colors ${
+                autopilotEnabled ? 'bg-green-600' : 'bg-gray-700'
+              }`}>
+                <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                  autopilotEnabled ? 'translate-x-[22px]' : 'translate-x-0.5'
+                }`} />
+              </div>
             </button>
             {autopilotEnabled && (
               <button
