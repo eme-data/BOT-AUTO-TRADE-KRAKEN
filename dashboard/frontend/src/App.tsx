@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Trades from './pages/Trades'
 import Settings from './pages/Settings'
 import AIAnalysis from './pages/AIAnalysis'
+import BotLogs from './pages/BotLogs'
 import Layout from './components/Layout'
 
 export default function App() {
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="/trades" element={<Trades token={token} />} />
         <Route path="/settings" element={<Settings token={token} />} />
         <Route path="/ai" element={<AIAnalysis token={token} />} />
+        <Route path="/logs" element={<BotLogs token={token} />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Layout>

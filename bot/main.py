@@ -70,10 +70,31 @@ class TradingBot:
         # Redis for pub/sub commands & live logs
         self._redis: redis.Redis | None = None
         self._running = False
-        self._log_buffer: deque[str] = deque(maxlen=500)
+        self._log_buffer: deque[dict] = deque(maxlen=500)
 
         # Active pairs being streamed
         self._active_pairs: set[str] = set()
+
+    # ── Log publishing ────────────────────────────────
+
+    async def _publish_log(self, level: str, event: str, **kwargs) -> None:
+        """Buffer a log entry and publish to Redis for the dashboard."""
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": level,
+            "event": event,
+            **{k: str(v) for k, v in kwargs.items()},
+        }
+        self._log_buffer.append(entry)
+        if self._redis:
+            try:
+                payload = json.dumps(entry)
+                await self._redis.publish("bot:logs", payload)
+                # Also persist to a list for REST API access
+                await self._redis.lpush("bot:logs:history", payload)
+                await self._redis.ltrim("bot:logs:history", 0, 499)
+            except Exception:
+                pass
 
     # ── Settings from DB ───────────────────────────────
 
@@ -189,6 +210,7 @@ class TradingBot:
         mode = "PAPER" if settings.bot_paper_trading else "LIVE"
         await notify_bot_status(f"Bot started on Kraken ({mode} mode)")
         logger.info("bot_started", pairs=list(self._active_pairs), mode=mode)
+        await self._publish_log("INFO", "bot_started", mode=mode, pairs=str(list(self._active_pairs)))
 
         # Start background tasks
         await asyncio.gather(
@@ -245,6 +267,7 @@ class TradingBot:
         if not check.allowed:
             orders_rejected_counter.labels(reason=check.reason).inc()
             logger.info("signal_rejected", reason=check.reason, pair=signal.pair)
+            await self._publish_log("INFO", "signal_rejected", pair=signal.pair, reason=check.reason)
             return
 
         # Shadow mode for autopilot strategies
@@ -312,6 +335,7 @@ class TradingBot:
             result = await self.broker.open_position(order)
         except Exception as exc:
             logger.error("order_error", pair=signal.pair, error=str(exc))
+            await self._publish_log("ERROR", "order_error", pair=signal.pair, error=str(exc))
             await notify_error(f"Order failed: {exc}")
             return
 
@@ -406,6 +430,11 @@ class TradingBot:
             price=result.price,
             strategy=signal.strategy_name,
         )
+        await self._publish_log(
+            "INFO", "trade_opened",
+            pair=signal.pair, direction=signal.direction.value,
+            size=size, price=result.price, strategy=signal.strategy_name,
+        )
 
     async def _close_on_trailing_stop(self, order_id: str, tick: Tick) -> None:
         stop = self.trailing_stop_mgr.get_stop(order_id)
@@ -458,6 +487,7 @@ class TradingBot:
                 pair=stop.pair,
                 profit=profit,
             )
+            await self._publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
 
         except Exception as exc:
             logger.error(
@@ -611,6 +641,7 @@ class TradingBot:
                         await self._process_signal(signal)
                 except Exception as exc:
                     logger.error("bar_update_error", pair=pair, error=str(exc))
+                    await self._publish_log("ERROR", "bar_update_error", pair=pair, error=str(exc))
 
     async def _account_metrics_loop(self) -> None:
         """Update account metrics every minute."""
@@ -637,6 +668,12 @@ class TradingBot:
                             "positions": len(positions),
                         }),
                     )
+                await self._publish_log(
+                    "DEBUG", "account_update",
+                    balance=balance.total_balance,
+                    pnl=self.risk_manager.state.daily_pnl,
+                    open_positions=len(positions),
+                )
             except Exception as exc:
                 logger.error("metrics_error", error=str(exc))
 
@@ -672,6 +709,7 @@ class TradingBot:
 
     async def _handle_command(self, command: str) -> None:
         logger.info("command_received", command=command)
+        await self._publish_log("INFO", "command_received", command=command)
         if command == "stop":
             self._running = False
         elif command == "reload_settings":

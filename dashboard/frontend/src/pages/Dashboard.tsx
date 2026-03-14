@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle } from 'lucide-react'
+import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet } from 'lucide-react'
 
 interface DashboardProps {
   token: string
@@ -67,15 +67,27 @@ export default function Dashboard({ token }: DashboardProps) {
   const [livePnl, setLivePnl] = useState<number | null>(null)
   const [livePositions, setLivePositions] = useState<number | null>(null)
 
+  // Real Kraken balance
+  const [krakenBalance, setKrakenBalance] = useState<{
+    total_balance: number
+    available_balance: number
+    open_positions: number
+    positions: { pair: string; direction: string; size: number; entry_price: number; unrealized_pnl: number }[]
+  } | null>(null)
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statusRes, tradesRes] = await Promise.all([
+        const [statusRes, tradesRes, balanceRes] = await Promise.all([
           api.get('/bot/status'),
           api.get('/trades/?limit=20'),
+          api.get('/bot/balance'),
         ])
         setBotStatus(statusRes.data)
         setTrades(tradesRes.data)
+        if (balanceRes.data && !balanceRes.data.error) {
+          setKrakenBalance(balanceRes.data)
+        }
       } catch {
         // handle error
       } finally {
@@ -187,11 +199,52 @@ export default function Dashboard({ token }: DashboardProps) {
         />
       </div>
 
-      {/* Live balance card */}
-      {liveBalance !== null && (
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 mb-8">
-          <p className="text-gray-500 text-xs mb-1">Account Balance (live)</p>
-          <p className="text-xl font-bold font-mono">${liveBalance.toFixed(2)}</p>
+      {/* Kraken Account Balance */}
+      {krakenBalance && (
+        <div className="bg-gray-900 rounded-xl p-6 border border-gray-800 mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="inline-flex p-2 rounded-lg bg-blue-500/10 text-blue-400">
+              <Wallet size={20} />
+            </div>
+            <div>
+              <h3 className="font-semibold">Compte Kraken</h3>
+              <p className="text-xs text-gray-500">Solde en temps reel</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div>
+              <p className="text-gray-500 text-xs mb-1">Solde total</p>
+              <p className="text-2xl font-bold font-mono">${krakenBalance.total_balance.toFixed(2)}</p>
+            </div>
+            <div>
+              <p className="text-gray-500 text-xs mb-1">Disponible</p>
+              <p className="text-lg font-bold font-mono text-green-400">${krakenBalance.available_balance.toFixed(2)}</p>
+            </div>
+            <div>
+              <p className="text-gray-500 text-xs mb-1">Positions ouvertes</p>
+              <p className="text-lg font-bold">{krakenBalance.open_positions}</p>
+            </div>
+          </div>
+          {krakenBalance.positions.length > 0 && (
+            <div className="border-t border-gray-800 pt-3">
+              <p className="text-xs text-gray-500 mb-2">Positions actives</p>
+              <div className="space-y-2">
+                {krakenBalance.positions.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm bg-gray-800/50 rounded-lg px-3 py-2">
+                    <span className="font-mono">{p.pair}</span>
+                    <span className={p.direction === 'buy' ? 'text-green-400' : 'text-red-400'}>
+                      {p.direction.toUpperCase()}
+                    </span>
+                    <span className="text-gray-400">Size: {p.size}</span>
+                    <span className="text-gray-400">Entry: ${p.entry_price.toFixed(2)}</span>
+                    <span className={p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                      {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} $
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

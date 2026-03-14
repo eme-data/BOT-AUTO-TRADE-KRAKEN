@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Settings, History, LogOut, Brain } from 'lucide-react'
+import { BarChart3, Settings, History, LogOut, Brain, Terminal } from 'lucide-react'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/', label: 'Dashboard', icon: BarChart3 },
   { to: '/trades', label: 'Trades', icon: History },
   { to: '/ai', label: 'Analyse IA', icon: Brain },
+  { to: '/logs', label: 'Logs', icon: Terminal },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
