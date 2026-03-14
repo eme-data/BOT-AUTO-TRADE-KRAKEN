@@ -50,14 +50,17 @@ async def bot_balance():
     if not api_key or not api_secret:
         return {"error": "Kraken credentials not configured"}
 
+    # Apply DB credentials to in-memory settings so broker.connect() uses them
     from bot.broker.kraken_rest import KrakenRestClient
 
+    old_key = settings.kraken_api_key
+    old_secret = settings.kraken_api_secret
+    old_acc = settings.kraken_acc_type
+    object.__setattr__(settings, "kraken_api_key", api_key)
+    object.__setattr__(settings, "kraken_api_secret", api_secret)
+    object.__setattr__(settings, "kraken_acc_type", acc_type)
+
     broker = KrakenRestClient()
-    # Override credentials
-    broker.exchange.apiKey = api_key
-    broker.exchange.secret = api_secret
-    if acc_type == "DEMO":
-        broker.exchange.setSandboxMode(True)
 
     try:
         await broker.connect()
@@ -86,6 +89,10 @@ async def bot_balance():
         return {"error": str(exc)}
     finally:
         await broker.disconnect()
+        # Restore original in-memory settings
+        object.__setattr__(settings, "kraken_api_key", old_key)
+        object.__setattr__(settings, "kraken_api_secret", old_secret)
+        object.__setattr__(settings, "kraken_acc_type", old_acc)
 
 
 @router.post("/stop", dependencies=[Depends(require_admin)])
