@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { BarChart3, Settings, History, LogOut, Brain, Terminal } from 'lucide-react'
+import AltiorLogo from '../assets/AltiorLogo'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -21,9 +22,12 @@ export default function Layout({ children, onLogout }: LayoutProps) {
     <div className="flex h-screen">
       {/* Sidebar */}
       <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
-        <div className="p-6">
-          <h1 className="text-xl font-bold text-blue-400">Kraken Bot</h1>
-          <p className="text-xs text-gray-500 mt-1">Auto-Trade Dashboard</p>
+        <div className="px-5 py-5 flex items-center gap-3">
+          <AltiorLogo size={44} className="text-blue-400 shrink-0" />
+          <div>
+            <p className="text-[10px] text-gray-500 font-medium tracking-wider uppercase">Holding</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Auto-Trade Bot</p>
+          </div>
         </div>
 
         <nav className="flex-1 px-4 space-y-1">

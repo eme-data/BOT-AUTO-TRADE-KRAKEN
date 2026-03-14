@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import axios from 'axios'
+import AltiorLogo from '../assets/AltiorLogo'
 
 interface LoginProps {
   onLogin: (token: string) => void
@@ -27,9 +28,9 @@ export default function Login({ onLogin }: LoginProps) {
         onSubmit={handleSubmit}
         className="bg-gray-900 p-8 rounded-2xl shadow-xl w-96 border border-gray-800"
       >
-        <h2 className="text-2xl font-bold text-center mb-6 text-blue-400">
-          Kraken Bot
-        </h2>
+        <div className="flex justify-center mb-6">
+          <AltiorLogo size={64} className="text-blue-400" />
+        </div>
 
         {error && (
           <p className="text-red-400 text-sm text-center mb-4">{error}</p>
