@@ -134,7 +134,7 @@ class Settings(BaseSettings):
 
     autopilot_enabled: bool = False
     autopilot_shadow_mode: bool = True
-    autopilot_scan_interval_minutes: int = 60
+    autopilot_scan_interval_minutes: int = 30
     autopilot_max_active: int = 3
     autopilot_min_score: float = 0.55
 
