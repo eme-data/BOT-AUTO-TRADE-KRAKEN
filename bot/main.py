@@ -659,15 +659,32 @@ class TradingBot:
 
                 # Publish status to Redis as JSON
                 if self._redis:
-                    await self._redis.publish(
-                        "bot:status",
-                        json.dumps({
-                            "type": "status",
-                            "balance": balance.total_balance,
-                            "pnl": self.risk_manager.state.daily_pnl,
-                            "positions": len(positions),
-                        }),
-                    )
+                    status_data = {
+                        "type": "status",
+                        "balance": balance.total_balance,
+                        "pnl": self.risk_manager.state.daily_pnl,
+                        "positions": len(positions),
+                    }
+                    await self._redis.publish("bot:status", json.dumps(status_data))
+                    # Also store balance for the dashboard REST endpoint
+                    balance_data = {
+                        "total_balance": balance.total_balance,
+                        "available_balance": balance.available_balance,
+                        "currency": balance.currency,
+                        "open_positions": len(positions),
+                        "positions": [
+                            {
+                                "pair": p.pair,
+                                "direction": p.direction.value if hasattr(p.direction, "value") else str(p.direction),
+                                "size": p.size,
+                                "entry_price": p.entry_price,
+                                "unrealized_pnl": getattr(p, "unrealized_pnl", 0.0),
+                            }
+                            for p in positions
+                        ],
+                        "mode": "PAPER" if settings.bot_paper_trading else "LIVE",
+                    }
+                    await self._redis.set("bot:last_balance", json.dumps(balance_data))
                 await self._publish_log(
                     "DEBUG", "account_update",
                     balance=balance.total_balance,

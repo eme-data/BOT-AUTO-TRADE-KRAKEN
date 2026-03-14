@@ -30,7 +30,7 @@ async def bot_status():
 
 @router.get("/balance")
 async def bot_balance():
-    """Get real Kraken account balance."""
+    """Get Kraken account balance (real or paper)."""
     from bot.crypto import decrypt
     from bot.db.repository import SettingsRepository
     from bot.db.session import get_session
@@ -46,11 +46,34 @@ async def bot_balance():
     api_key = db_values.get("kraken_api_key", settings.kraken_api_key)
     api_secret = db_values.get("kraken_api_secret", settings.kraken_api_secret)
     acc_type = db_values.get("kraken_acc_type", settings.kraken_acc_type)
+    paper_trading = db_values.get("bot_paper_trading", str(settings.bot_paper_trading))
+    is_paper = str(paper_trading).lower() in ("true", "1", "yes", "on")
+
+    # In DEMO mode or paper trading, return the bot's paper balance from Redis
+    if acc_type == "DEMO" or is_paper:
+        try:
+            r = await _get_redis()
+            status_raw = await r.get("bot:last_balance")
+            await r.close()
+            if status_raw:
+                data = json.loads(status_raw.decode())
+                return data
+        except Exception:
+            pass
+        # Fallback: return paper broker default
+        return {
+            "total_balance": 10000.0,
+            "available_balance": 10000.0,
+            "currency": "USD",
+            "open_positions": 0,
+            "positions": [],
+            "mode": "DEMO / Paper Trading",
+        }
 
     if not api_key or not api_secret:
         return {"error": "Kraken credentials not configured"}
 
-    # Apply DB credentials to in-memory settings so broker.connect() uses them
+    # LIVE mode: connect to real Kraken API
     from bot.broker.kraken_rest import KrakenRestClient
 
     old_key = settings.kraken_api_key
@@ -58,7 +81,7 @@ async def bot_balance():
     old_acc = settings.kraken_acc_type
     object.__setattr__(settings, "kraken_api_key", api_key)
     object.__setattr__(settings, "kraken_api_secret", api_secret)
-    object.__setattr__(settings, "kraken_acc_type", acc_type)
+    object.__setattr__(settings, "kraken_acc_type", "LIVE")  # Force LIVE, never sandbox
 
     broker = KrakenRestClient()
 
@@ -84,12 +107,12 @@ async def bot_balance():
                 }
                 for p in positions
             ],
+            "mode": "LIVE",
         }
     except Exception as exc:
         return {"error": str(exc)}
     finally:
         await broker.disconnect()
-        # Restore original in-memory settings
         object.__setattr__(settings, "kraken_api_key", old_key)
         object.__setattr__(settings, "kraken_api_secret", old_secret)
         object.__setattr__(settings, "kraken_acc_type", old_acc)

@@ -121,7 +121,6 @@ class KrakenRestClient(AbstractBroker):
     # ── Lifecycle ──────────────────────────────────────
 
     async def connect(self) -> None:
-        sandbox = settings.kraken_acc_type == "DEMO"
         self._exchange = ccxt.kraken(
             {
                 "apiKey": settings.kraken_api_key,
@@ -130,12 +129,11 @@ class KrakenRestClient(AbstractBroker):
                 "options": {"defaultType": "spot"},
             }
         )
-        if sandbox:
-            self._exchange.set_sandbox_mode(True)
+        # Note: Kraken does not support sandbox mode in ccxt.
+        # DEMO mode is handled by PaperBroker at the bot level.
         await self._exchange.load_markets()
         logger.info(
             "kraken_connected",
-            sandbox=sandbox,
             markets=len(self._exchange.markets),
         )
 

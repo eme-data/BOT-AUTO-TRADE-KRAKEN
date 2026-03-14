@@ -187,6 +187,10 @@ async def test_kraken_connection(body: TestConnectionRequest):
     """Test Kraken API credentials without saving them."""
     import ccxt.async_support as ccxt
 
+    # DEMO mode uses PaperBroker – no real connection needed
+    if body.acc_type == "DEMO":
+        return {"success": True, "balance_usd": 10000.0, "mode": "DEMO (Paper Trading)"}
+
     exchange = ccxt.kraken(
         {
             "apiKey": body.api_key,
@@ -194,8 +198,6 @@ async def test_kraken_connection(body: TestConnectionRequest):
             "enableRateLimit": True,
         }
     )
-    if body.acc_type == "DEMO":
-        exchange.set_sandbox_mode(True)
 
     try:
         balance = await exchange.fetch_balance()
