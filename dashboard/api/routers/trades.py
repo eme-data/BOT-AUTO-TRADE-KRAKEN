@@ -7,8 +7,9 @@ import io
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
@@ -21,7 +22,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-from bot.db.repository import TradeRepository
+from bot.db.repository import TradeNoteRepository, TradeRepository
 from bot.db.session import get_session
 from dashboard.api.deps import get_current_user, get_user_id
 
@@ -269,3 +270,103 @@ async def export_pdf(days: Optional[int] = Query(30), user_id: int = Depends(get
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ─── Trade Notes / Journal ──────────────────────────────────────────
+
+
+class NoteCreate(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000)
+    tags: list[str] | None = None
+    mood: str | None = Field(None, pattern="^(confident|uncertain|fearful|neutral)$")
+
+
+class NoteUpdate(BaseModel):
+    content: str | None = Field(None, min_length=1, max_length=5000)
+    tags: list[str] | None = None
+    mood: str | None = Field(None, pattern="^(confident|uncertain|fearful|neutral)$")
+
+
+class NoteResponse(BaseModel):
+    id: int
+    user_id: int
+    trade_id: int | None
+    content: str
+    tags: list[str] | None
+    mood: str | None
+    created_at: str
+    updated_at: str
+
+
+def _note_dict(n) -> dict:
+    return {
+        "id": n.id,
+        "user_id": n.user_id,
+        "trade_id": n.trade_id,
+        "content": n.content,
+        "tags": n.tags,
+        "mood": n.mood,
+        "created_at": n.created_at.isoformat() if n.created_at else None,
+        "updated_at": n.updated_at.isoformat() if n.updated_at else None,
+    }
+
+
+@router.get("/journal")
+async def get_journal(limit: int = Query(50, ge=1, le=500), user_id: int = Depends(get_user_id)):
+    """Get all trade notes as a journal view."""
+    async with get_session() as session:
+        repo = TradeNoteRepository(session, user_id=user_id)
+        notes = await repo.get_recent(limit=limit)
+        return [_note_dict(n) for n in notes]
+
+
+@router.post("/{trade_id}/notes", status_code=201)
+async def create_note(trade_id: int, body: NoteCreate, user_id: int = Depends(get_user_id)):
+    """Create a note for a specific trade."""
+    async with get_session() as session:
+        repo = TradeNoteRepository(session, user_id=user_id)
+        note = await repo.create(
+            trade_id=trade_id,
+            content=body.content,
+            tags=body.tags,
+            mood=body.mood,
+        )
+        await session.commit()
+        return _note_dict(note)
+
+
+@router.get("/{trade_id}/notes")
+async def get_trade_notes(trade_id: int, user_id: int = Depends(get_user_id)):
+    """Get all notes for a specific trade."""
+    async with get_session() as session:
+        repo = TradeNoteRepository(session, user_id=user_id)
+        notes = await repo.get_by_trade(trade_id)
+        return [_note_dict(n) for n in notes]
+
+
+@router.put("/notes/{note_id}")
+async def update_note(note_id: int, body: NoteUpdate, user_id: int = Depends(get_user_id)):
+    """Update an existing note."""
+    async with get_session() as session:
+        repo = TradeNoteRepository(session, user_id=user_id)
+        note = await repo.update(
+            note_id=note_id,
+            content=body.content,
+            tags=body.tags,
+            mood=body.mood,
+        )
+        if note is None:
+            raise HTTPException(status_code=404, detail="Note not found")
+        await session.commit()
+        return _note_dict(note)
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+async def delete_note(note_id: int, user_id: int = Depends(get_user_id)):
+    """Delete a note."""
+    async with get_session() as session:
+        repo = TradeNoteRepository(session, user_id=user_id)
+        deleted = await repo.delete(note_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Note not found")
+        await session.commit()

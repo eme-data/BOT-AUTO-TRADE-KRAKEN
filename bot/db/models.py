@@ -79,6 +79,22 @@ class SignalLog(Base):
     )
 
 
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True, index=True)
+    action = Column(String(64), nullable=False, index=True)  # login, settings_update, trade_opened, user_created, etc.
+    resource = Column(String(64), nullable=True)  # settings, trade, user, bot
+    resource_id = Column(String(128), nullable=True)  # ID of affected resource
+    details = Column(JSON, nullable=True)  # extra context
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
     __table_args__ = (
@@ -145,6 +161,26 @@ class DailyPnL(Base):
     unrealized_pnl = Column(Float, default=0.0)
     winning_trades = Column(Integer, default=0)
     losing_trades = Column(Integer, default=0)
+
+
+class TradeNote(Base):
+    __tablename__ = "trade_notes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=False, index=True)
+    trade_id = Column(Integer, ForeignKey("trades.id"), nullable=True, index=True)
+    content = Column(Text, nullable=False)
+    tags = Column(JSON, nullable=True)  # ["mistake", "good_entry", "lesson_learned"]
+    mood = Column(String(16), nullable=True)  # confident, uncertain, fearful, neutral
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class AIAnalysisLog(Base):

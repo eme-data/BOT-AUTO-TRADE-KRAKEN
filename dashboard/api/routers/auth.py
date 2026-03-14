@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import bcrypt
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from bot.config import settings
 from bot.db.models import AdminUser
+from bot.db.repository import AuditLogRepository
 from bot.db.session import get_session
 from dashboard.api.auth.jwt import create_access_token
 
@@ -26,7 +27,7 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
     async with get_session() as session:
         # Try DB-based users first
         result = await session.execute(
@@ -48,6 +49,16 @@ async def login(body: LoginRequest):
                 "role": user.role,
                 "user_id": user.id,
             })
+            # Audit log
+            ip = request.client.host if request.client else None
+            audit = AuditLogRepository(session, user_id=user.id)
+            await audit.log(
+                action="login",
+                resource="user",
+                resource_id=str(user.id),
+                details={"username": user.username},
+                ip_address=ip,
+            )
             return TokenResponse(access_token=token)
 
         # Fallback: legacy env-based admin credentials
@@ -69,6 +80,16 @@ async def login(body: LoginRequest):
                 "role": "admin",
                 "user_id": legacy.id,
             })
+            # Audit log
+            ip = request.client.host if request.client else None
+            audit = AuditLogRepository(session, user_id=legacy.id)
+            await audit.log(
+                action="login",
+                resource="user",
+                resource_id=str(legacy.id),
+                details={"username": body.username, "legacy_login": True},
+                ip_address=ip,
+            )
             return TokenResponse(access_token=token)
 
     raise HTTPException(

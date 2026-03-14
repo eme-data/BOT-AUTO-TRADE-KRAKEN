@@ -8,11 +8,11 @@ The bot reloads settings on demand via Redis command.
 from __future__ import annotations
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from bot.config import ALL_DB_KEYS, SENSITIVE_KEYS, SETTINGS_SCHEMA, settings
-from bot.db.repository import SettingsRepository
+from bot.db.repository import AuditLogRepository, SettingsRepository
 from bot.db.session import get_session
 from bot.crypto import decrypt, encrypt
 from dashboard.api.deps import get_current_user, get_user_id, require_admin
@@ -93,7 +93,12 @@ async def get_category(category: str, user_id: int = Depends(get_user_id)):
 
 
 @router.put("/category/{category}", dependencies=[Depends(require_admin)])
-async def update_category(category: str, body: CategoryUpdate, user_id: int = Depends(get_user_id)):
+async def update_category(
+    category: str,
+    body: CategoryUpdate,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+):
     """Update all settings for a category at once."""
     if category not in SETTINGS_SCHEMA:
         return {"error": f"Unknown category: {category}"}
@@ -111,6 +116,17 @@ async def update_category(category: str, body: CategoryUpdate, user_id: int = De
         repo = SettingsRepository(session, user_id=user_id)
         count = await repo.bulk_set(to_save, SENSITIVE_KEYS, encrypt)
 
+        # Audit log
+        ip = request.client.host if request.client else None
+        audit = AuditLogRepository(session, user_id=user_id)
+        await audit.log(
+            action="settings_update",
+            resource="settings",
+            resource_id=category,
+            details={"keys": list(to_save.keys()), "category": category},
+            ip_address=ip,
+        )
+
     # Tell the bot to reload
     await _notify_reload(user_id)
 
@@ -120,7 +136,7 @@ async def update_category(category: str, body: CategoryUpdate, user_id: int = De
 # ── Individual setting ─────────────────────────────────
 
 @router.put("/", dependencies=[Depends(require_admin)])
-async def update_setting(body: SettingUpdate, user_id: int = Depends(get_user_id)):
+async def update_setting(body: SettingUpdate, request: Request, user_id: int = Depends(get_user_id)):
     """Update a single setting."""
     if body.key not in ALL_DB_KEYS:
         return {"error": f"Unknown setting: {body.key}"}
@@ -132,6 +148,17 @@ async def update_setting(body: SettingUpdate, user_id: int = Depends(get_user_id
         is_sensitive = body.key in SENSITIVE_KEYS
         value = encrypt(body.value) if is_sensitive and body.value else body.value
         await repo.set(body.key, value, encrypted=is_sensitive)
+
+        # Audit log
+        ip = request.client.host if request.client else None
+        audit = AuditLogRepository(session, user_id=user_id)
+        await audit.log(
+            action="settings_update",
+            resource="settings",
+            resource_id=body.key,
+            details={"keys": [body.key]},
+            ip_address=ip,
+        )
 
     await _notify_reload(user_id)
     return {"message": f"Setting '{body.key}' updated"}

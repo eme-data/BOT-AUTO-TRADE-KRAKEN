@@ -12,10 +12,12 @@ from bot.db.models import (
     AdminUser,
     AIAnalysisLog,
     AppSetting,
+    AuditLog,
     DailyPnL,
     SignalLog,
     StrategyState,
     Trade,
+    TradeNote,
     WatchedMarket,
 )
 
@@ -84,6 +86,83 @@ class TradeRepository:
         result = await self.session.execute(self._user_filter(stmt))
         profits = result.scalars().all()
         return sum(p for p in profits if p is not None)
+
+
+class TradeNoteRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def create(
+        self,
+        content: str,
+        trade_id: int | None = None,
+        tags: list[str] | None = None,
+        mood: str | None = None,
+    ) -> TradeNote:
+        note = TradeNote(
+            user_id=self.user_id,
+            trade_id=trade_id,
+            content=content,
+            tags=tags,
+            mood=mood,
+        )
+        self.session.add(note)
+        await self.session.flush()
+        return note
+
+    async def get_by_trade(self, trade_id: int) -> list[TradeNote]:
+        stmt = (
+            select(TradeNote)
+            .where(TradeNote.trade_id == trade_id)
+            .where(TradeNote.user_id == self.user_id)
+            .order_by(TradeNote.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_recent(self, limit: int = 50) -> list[TradeNote]:
+        stmt = (
+            select(TradeNote)
+            .where(TradeNote.user_id == self.user_id)
+            .order_by(TradeNote.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def update(
+        self,
+        note_id: int,
+        content: str | None = None,
+        tags: list[str] | None = None,
+        mood: str | None = None,
+    ) -> TradeNote | None:
+        stmt = (
+            select(TradeNote)
+            .where(TradeNote.id == note_id)
+            .where(TradeNote.user_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        note = result.scalar_one_or_none()
+        if note is None:
+            return None
+        if content is not None:
+            note.content = content
+        if tags is not None:
+            note.tags = tags
+        if mood is not None:
+            note.mood = mood
+        return note
+
+    async def delete(self, note_id: int) -> bool:
+        stmt = (
+            delete(TradeNote)
+            .where(TradeNote.id == note_id)
+            .where(TradeNote.user_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
 
 
 class SignalRepository:
@@ -286,3 +365,53 @@ class AIAnalysisRepository:
             "avg_latency_ms": round(avg_latency),
             "avg_confidence": round(avg_confidence, 3),
         }
+
+
+class AuditLogRepository:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    def _user_filter(self, stmt):
+        if self.user_id is not None:
+            return stmt.where(AuditLog.user_id == self.user_id)
+        return stmt
+
+    async def log(
+        self,
+        action: str,
+        resource: str | None = None,
+        resource_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AuditLog:
+        entry = AuditLog(
+            user_id=self.user_id,
+            action=action,
+            resource=resource,
+            resource_id=resource_id,
+            details=details,
+            ip_address=ip_address,
+        )
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
+    async def get_recent(self, limit: int = 100) -> list[AuditLog]:
+        stmt = (
+            select(AuditLog)
+            .order_by(AuditLog.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(self._user_filter(stmt))
+        return list(result.scalars().all())
+
+    async def get_by_action(self, action: str, limit: int = 100) -> list[AuditLog]:
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.action == action)
+            .order_by(AuditLog.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(self._user_filter(stmt))
+        return list(result.scalars().all())

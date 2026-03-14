@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time as _time_mod
+from datetime import datetime, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -15,6 +17,9 @@ from bot.db.repository import SettingsRepository
 from bot.db.session import get_session, init_db, close_db
 
 logger = structlog.get_logger(__name__)
+
+HEALTH_STALE_SECONDS = 300  # 5 minutes – loop considered dead after this
+HEALTH_CHECK_INTERVAL = 60  # seconds between health monitor ticks
 
 
 async def _load_user_settings(user_id: int) -> UserSettings:
@@ -52,6 +57,16 @@ class UserBotContext:
         self.cfg = user_settings
         self._redis = redis_client
         self._running = False
+        self._started_at: float | None = None
+
+        # Health tracking – each loop writes its timestamp here
+        self._last_loop_run: dict[str, float] = {
+            "bar_update": 0.0,
+            "account_metrics": 0.0,
+            "autopilot": 0.0,
+            "redis_listener": 0.0,
+        }
+        self._last_tick_at: float = 0.0
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -73,6 +88,41 @@ class UserBotContext:
         self.autopilot: AutopilotManager | None = None
 
         self._active_pairs: set[str] = set()
+
+    # ── Health status ──────────────────────────────────
+
+    @property
+    def health_status(self) -> dict[str, Any]:
+        """Return a snapshot of this context's health."""
+        now = _time_mod.time()
+
+        def _loop_status(name: str) -> str:
+            last = self._last_loop_run.get(name, 0.0)
+            if last == 0.0:
+                return "not_started"
+            return "alive" if (now - last) < HEALTH_STALE_SECONDS else "dead"
+
+        uptime = (now - self._started_at) if self._started_at else 0.0
+
+        return {
+            "user_id": self.user_id,
+            "running": self._running,
+            "uptime_seconds": round(uptime, 1),
+            "last_tick_at": (
+                datetime.fromtimestamp(self._last_tick_at, tz=timezone.utc).isoformat()
+                if self._last_tick_at
+                else None
+            ),
+            "active_pairs": sorted(self._active_pairs),
+            "active_pairs_count": len(self._active_pairs),
+            "mode": "PAPER" if self.cfg.bot_paper_trading else "LIVE",
+            "loops_status": {
+                "bar_update": _loop_status("bar_update"),
+                "account_metrics": _loop_status("account_metrics"),
+                "autopilot": _loop_status("autopilot"),
+                "redis_listener": _loop_status("redis_listener"),
+            },
+        }
 
     # ── Redis helpers (namespaced) ──────────────────────
 
@@ -144,6 +194,7 @@ class UserBotContext:
                 logger.warning("warmup_error", user_id=self.user_id, pair=pair, error=str(exc))
 
         self._running = True
+        self._started_at = _time_mod.time()
         mode = "PAPER" if self.cfg.bot_paper_trading else "LIVE"
         logger.info("user_bot_started", user_id=self.user_id, mode=mode, pairs=list(self._active_pairs))
         await self.publish_log("INFO", "bot_started", mode=mode, pairs=str(list(self._active_pairs)))
@@ -190,6 +241,7 @@ class UserBotContext:
     async def _on_tick(self, tick) -> None:
         from bot.metrics import tick_counter
         tick_counter.inc()
+        self._last_tick_at = _time_mod.time()
         triggered = self.trailing_stop_mgr.update_on_tick(tick)
         for order_id in triggered:
             await self._close_on_trailing_stop(order_id, tick)
@@ -405,6 +457,7 @@ class UserBotContext:
 
         while self._running:
             await asyncio.sleep(300)
+            self._last_loop_run["bar_update"] = _time_mod.time()
             if not self.cfg.is_configured:
                 continue
             for pair in list(self._active_pairs):
@@ -436,6 +489,7 @@ class UserBotContext:
 
         while self._running:
             await asyncio.sleep(60)
+            self._last_loop_run["account_metrics"] = _time_mod.time()
             if not self.cfg.is_configured:
                 continue
             try:
@@ -486,6 +540,7 @@ class UserBotContext:
             else:
                 interval = self.cfg.autopilot_scan_interval_minutes * 60
                 await asyncio.sleep(interval)
+            self._last_loop_run["autopilot"] = _time_mod.time()
             if not self.cfg.is_configured or not self.autopilot.enabled:
                 continue
             try:
@@ -521,6 +576,7 @@ class UserBotContext:
             # Listen on user-specific AND global channel
             await pubsub.subscribe(self._rkey("commands"), "bot:commands")
             while self._running:
+                self._last_loop_run["redis_listener"] = _time_mod.time()
                 msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if msg and msg["type"] == "message":
                     await self._handle_command(msg["data"].decode())
@@ -546,6 +602,8 @@ class UserBotManager:
     def __init__(self) -> None:
         self.contexts: dict[int, UserBotContext] = {}
         self._redis: aioredis.Redis | None = None
+        self._running = False
+        self._context_tasks: dict[int, asyncio.Task] = {}
 
     async def start(self) -> None:
         logger.info("user_bot_manager_starting")
@@ -583,26 +641,142 @@ class UserBotManager:
 
         logger.info("users_discovered", count=len(users), users=[u.username for u in users])
 
+        self._running = True
+
         # Create a context per user
-        tasks = []
         for user in users:
             user_settings = await _load_user_settings(user.id)
             ctx = UserBotContext(user.id, user_settings, self._redis)
             self.contexts[user.id] = ctx
             try:
                 await ctx.start()
-                tasks.append(ctx.run_loops())
+                task = asyncio.create_task(
+                    ctx.run_loops(), name=f"user_bot_{user.id}"
+                )
+                self._context_tasks[user.id] = task
             except Exception as exc:
                 logger.error("user_bot_start_error", user_id=user.id, error=str(exc))
 
-        if tasks:
+        if self._context_tasks:
             from bot.notifications import notify_bot_status
             mode_summary = ", ".join(
                 f"user:{uid}({'PAPER' if ctx.cfg.bot_paper_trading else 'LIVE'})"
                 for uid, ctx in self.contexts.items()
             )
             await notify_bot_status(f"Multi-tenant bot started: {mode_summary}")
-            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Run the health monitor alongside user tasks
+            health_task = asyncio.create_task(
+                self._health_monitor_loop(), name="health_monitor"
+            )
+            all_tasks = list(self._context_tasks.values()) + [health_task]
+            await asyncio.gather(*all_tasks, return_exceptions=True)
+
+    # ── Health monitor ──────────────────────────────────
+
+    async def _health_monitor_loop(self) -> None:
+        """Periodically check every context's health, publish to Redis, and
+        auto-restart contexts that appear stalled."""
+        while self._running:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            now = _time_mod.time()
+            all_health: dict[str, Any] = {
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "contexts": {},
+            }
+
+            for uid, ctx in list(self.contexts.items()):
+                health = ctx.health_status
+                all_health["contexts"][str(uid)] = health
+
+                # Check if context needs a restart: it must be running, started
+                # more than 5 min ago, and have at least one dead loop.
+                if not ctx._running:
+                    continue
+                if ctx._started_at and (now - ctx._started_at) < HEALTH_STALE_SECONDS:
+                    # Too early to judge – loops haven't had a chance yet
+                    continue
+
+                dead_loops = [
+                    name
+                    for name, status in health["loops_status"].items()
+                    if status == "dead"
+                ]
+                if dead_loops:
+                    logger.warning(
+                        "health_check_stale_loops",
+                        user_id=uid,
+                        dead_loops=dead_loops,
+                        msg="Auto-restarting context",
+                    )
+                    await self._restart_context(uid)
+
+                # Also restart if the context task itself has finished
+                task = self._context_tasks.get(uid)
+                if task and task.done():
+                    exc = task.exception() if not task.cancelled() else None
+                    logger.warning(
+                        "health_check_task_dead",
+                        user_id=uid,
+                        error=str(exc) if exc else "task finished",
+                        msg="Auto-restarting context",
+                    )
+                    await self._restart_context(uid)
+
+            # Publish to Redis
+            if self._redis:
+                try:
+                    payload = json.dumps(all_health)
+                    await self._redis.set("bot:health", payload)
+                    # Also per-user keys
+                    for uid_str, h in all_health["contexts"].items():
+                        await self._redis.set(
+                            f"bot:user:{uid_str}:health", json.dumps(h)
+                        )
+                except Exception as exc:
+                    logger.debug("health_redis_publish_error", error=str(exc))
+
+            logger.debug(
+                "health_check_complete",
+                contexts=len(all_health["contexts"]),
+            )
+
+    async def _restart_context(self, user_id: int) -> None:
+        """Stop and restart a single user's bot context."""
+        ctx = self.contexts.get(user_id)
+        if not ctx:
+            return
+
+        logger.info("restarting_user_context", user_id=user_id)
+
+        # Cancel the existing task
+        old_task = self._context_tasks.pop(user_id, None)
+        if old_task and not old_task.done():
+            old_task.cancel()
+            try:
+                await old_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # Stop the old context gracefully
+        try:
+            await ctx.stop()
+        except Exception as exc:
+            logger.warning("restart_stop_error", user_id=user_id, error=str(exc))
+
+        # Rebuild from fresh settings
+        try:
+            user_settings = await _load_user_settings(user_id)
+            new_ctx = UserBotContext(user_id, user_settings, self._redis)
+            self.contexts[user_id] = new_ctx
+            await new_ctx.start()
+            task = asyncio.create_task(
+                new_ctx.run_loops(), name=f"user_bot_{user_id}"
+            )
+            self._context_tasks[user_id] = task
+            logger.info("user_context_restarted", user_id=user_id)
+        except Exception as exc:
+            logger.error("restart_failed", user_id=user_id, error=str(exc))
 
     async def _run_legacy_single_bot(self) -> None:
         """Fallback: run the old single-bot when no users exist yet."""
@@ -614,11 +788,17 @@ class UserBotManager:
             await bot.stop()
 
     async def stop(self) -> None:
+        self._running = False
+        # Cancel all context tasks
+        for uid, task in self._context_tasks.items():
+            if not task.done():
+                task.cancel()
         for uid, ctx in self.contexts.items():
             try:
                 await ctx.stop()
             except Exception as exc:
                 logger.error("user_bot_stop_error", user_id=uid, error=str(exc))
+        self._context_tasks.clear()
         if self._redis:
             await self._redis.close()
         await close_db()

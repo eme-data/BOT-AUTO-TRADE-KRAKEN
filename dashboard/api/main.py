@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.routers import (
     ai,
+    analytics,
+    audit,
     auth,
     bot_control,
     markets,
@@ -37,6 +39,8 @@ app.add_middleware(
 )
 
 # Register routers
+app.include_router(analytics.router)
+app.include_router(audit.router)
 app.include_router(auth.router)
 app.include_router(bot_control.router)
 app.include_router(trades.router)

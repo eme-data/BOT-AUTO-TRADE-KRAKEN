@@ -9,6 +9,10 @@ import Settings from './pages/Settings'
 import AIAnalysis from './pages/AIAnalysis'
 import BotLogs from './pages/BotLogs'
 import UsersPage from './pages/Users'
+import Analytics from './pages/Analytics'
+import Journal from './pages/Journal'
+import AuditLog from './pages/AuditLog'
+import Health from './pages/Health'
 import Layout from './components/Layout'
 
 function decodeJwt(token: string): Record<string, unknown> | null {
@@ -97,11 +101,17 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard token={token} />} />
         <Route path="/trades" element={<Trades token={token} />} />
+        <Route path="/analytics" element={<Analytics token={token} />} />
+        <Route path="/journal" element={<Journal token={token} />} />
         <Route path="/settings" element={<Settings token={token} />} />
         <Route path="/ai" element={<AIAnalysis token={token} />} />
         <Route path="/logs" element={<BotLogs token={token} />} />
+        <Route path="/health" element={<Health token={token} />} />
         {userInfo?.role === 'admin' && (
-          <Route path="/users" element={<UsersPage token={token} />} />
+          <>
+            <Route path="/users" element={<UsersPage token={token} />} />
+            <Route path="/audit" element={<AuditLog token={token} />} />
+          </>
         )}
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

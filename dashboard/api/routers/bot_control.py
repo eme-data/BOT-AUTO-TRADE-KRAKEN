@@ -1,8 +1,14 @@
-"""Bot control endpoints – start/stop/status/balance."""
+"""Bot control endpoints – start/stop/status/balance/health."""
 
 from __future__ import annotations
 
 import json
+import os
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover
+    psutil = None  # type: ignore[assignment]
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
@@ -34,6 +40,64 @@ async def bot_status(user_id: int = Depends(get_user_id)):
         return {"status": "running", "details": status_msg.decode() if status_msg else "unknown"}
     except Exception:
         return {"status": "unknown", "details": "Redis unavailable"}
+
+
+@router.get("/health")
+async def bot_health(
+    user_id: int = Depends(get_user_id),
+    user: dict = Depends(get_current_user),
+):
+    """Return health status of bot contexts.
+
+    Admins get all contexts; regular users get only their own.
+    Data is read from Redis keys published by the health monitor loop.
+    """
+    is_admin = user.get("role") == "admin"
+
+    try:
+        r = await _get_redis()
+
+        if is_admin:
+            # Return the global health blob with all contexts
+            raw = await r.get("bot:health")
+            if raw:
+                health_data = json.loads(raw.decode())
+            else:
+                health_data = {"checked_at": None, "contexts": {}}
+        else:
+            # Return only this user's health
+            raw = await r.get(_rkey(user_id, "health"))
+            if raw:
+                health_data = json.loads(raw.decode())
+            else:
+                health_data = {"user_id": user_id, "running": False, "loops_status": {}}
+
+        # Enrich with process-level memory usage
+        memory = None
+        if psutil is not None:
+            try:
+                process = psutil.Process(os.getpid())
+                mem_info = process.memory_info()
+                memory = {
+                    "rss_mb": round(mem_info.rss / (1024 * 1024), 1),
+                    "vms_mb": round(mem_info.vms / (1024 * 1024), 1),
+                }
+            except Exception:
+                pass
+
+        await r.close()
+
+        return {
+            "ok": True,
+            "memory": memory,
+            "data": health_data,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "data": None,
+        }
 
 
 @router.get("/balance")
