@@ -716,13 +716,35 @@ class TradingBot:
             if not self.autopilot.enabled:
                 continue
             try:
-                await self.autopilot.run_scan_cycle()
-                await self._publish_log(
-                    "INFO", "autopilot_scan_done",
-                    active=str(len(self.autopilot.active_scores)),
-                )
+                await self._publish_log("INFO", "autopilot_cycle_start", status="scanning")
+                results = await self.autopilot.run_scan_cycle()
+                active = self.autopilot.active_scores
+                if results:
+                    top_pairs = ", ".join(f"{s.pair}({s.composite:.0%})" for s in results[:5])
+                    await self._publish_log(
+                        "INFO", "autopilot_scan_done",
+                        scanned=str(len(results)),
+                        active=str(len(active)),
+                        top=top_pairs,
+                    )
+                else:
+                    await self._publish_log(
+                        "WARNING", "autopilot_no_results",
+                        msg="Aucune paire au-dessus du seuil minimum",
+                    )
+                # Log each activated pair
+                for pair, score in active.items():
+                    await self._publish_log(
+                        "DEBUG", "autopilot_pair_active",
+                        pair=pair,
+                        score=f"{score.composite:.0%}",
+                        regime=score.regime,
+                        direction=score.direction_bias,
+                        strategy=score.recommended_strategy or "auto",
+                    )
             except Exception as exc:
                 logger.error("autopilot_error", error=str(exc))
+                await self._publish_log("ERROR", "autopilot_error", error=str(exc))
 
     async def _redis_command_listener(self) -> None:
         """Listen for commands on Redis pub/sub."""

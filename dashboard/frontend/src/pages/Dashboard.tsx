@@ -10,7 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3, Power } from 'lucide-react'
+import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3 } from 'lucide-react'
 
 interface DashboardProps {
   token: string

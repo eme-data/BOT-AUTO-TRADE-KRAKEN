@@ -48,22 +48,44 @@ class AutopilotManager:
         if not self.enabled:
             return []
 
-        logger.info("autopilot_cycle_start")
+        logger.info("autopilot_cycle_start", min_score=self.min_score, max_active=self.max_active)
 
         # 1. Discover candidates
         candidates = await self._scanner.scan_discovery()
+        logger.info("autopilot_discovery_done", candidates=len(candidates))
+
+        if not candidates:
+            logger.warning("autopilot_no_candidates", msg="Scanner returned 0 tradeable pairs")
+            return []
 
         # 2. Score each candidate
         scores: list[MarketScore] = []
+        scored_count = 0
+        error_count = 0
         for candidate in candidates:
             try:
                 score = await self._scorer.score(candidate.pair)
+                scored_count += 1
                 if score.composite >= self.min_score:
                     scores.append(score)
+                    logger.debug(
+                        "autopilot_pair_qualified",
+                        pair=candidate.pair,
+                        score=round(score.composite, 3),
+                        regime=score.regime,
+                    )
             except Exception as exc:
+                error_count += 1
                 logger.warning(
                     "scorer_error", pair=candidate.pair, error=str(exc)
                 )
+
+        logger.info(
+            "autopilot_scoring_done",
+            scored=scored_count,
+            qualified=len(scores),
+            errors=error_count,
+        )
 
         # 3. Rank and keep top N
         scores.sort(key=lambda s: s.composite, reverse=True)
