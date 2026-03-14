@@ -174,12 +174,12 @@ export default function Dashboard({ token }: DashboardProps) {
 
       // Load autopilot enabled state from settings
       try {
-        const settingsRes = await api.get('/settings/')
+        const settingsRes = await api.get('/settings/schema')
         if (settingsRes.data?.autopilot) {
           const apSetting = settingsRes.data.autopilot.autopilot_enabled
           if (apSetting) {
-            const val = apSetting.value
-            setAutopilotEnabled(val === true || val === 'true' || val === '1')
+            const val = String(apSetting.value).toLowerCase()
+            setAutopilotEnabled(val === 'true' || val === '1' || val === 'yes' || val === 'on')
           }
         }
       } catch { /* settings not available */ }
