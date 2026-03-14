@@ -139,7 +139,28 @@ class ManualAnalysisRequest(BaseModel):
 @router.post("/analyze")
 async def trigger_analysis(body: ManualAnalysisRequest):
     """Trigger a manual AI analysis for a pair."""
-    if not settings.ai_enabled or not settings.ai_api_key:
+    from bot.crypto import decrypt
+    from bot.db.repository import SettingsRepository
+    from bot.db.session import get_session as _get_session
+
+    # Read fresh AI settings from DB
+    ai_enabled = settings.ai_enabled
+    ai_api_key = settings.ai_api_key
+    try:
+        async with _get_session() as session:
+            repo = SettingsRepository(session)
+            db_values = await repo.get_decrypted_values(decrypt)
+            if db_values:
+                if "ai_enabled" in db_values:
+                    ai_enabled = str(db_values["ai_enabled"]).lower() in ("true", "1", "yes", "on")
+                if "ai_api_key" in db_values:
+                    ai_api_key = db_values["ai_api_key"]
+                # Apply all AI settings to in-memory so ClaudeAnalyzer picks them up
+                settings.apply_db_overrides(db_values)
+    except Exception:
+        pass
+
+    if not ai_enabled or not ai_api_key:
         return {"error": "AI non configure. Activez-le dans les parametres."}
 
     analyzer = ClaudeAnalyzer()
