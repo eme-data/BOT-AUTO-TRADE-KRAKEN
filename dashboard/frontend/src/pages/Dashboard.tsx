@@ -63,7 +63,6 @@ export default function Dashboard({ token }: DashboardProps) {
   const [loading, setLoading] = useState(true)
 
   // Live metrics from WebSocket
-  const [liveBalance, setLiveBalance] = useState<number | null>(null)
   const [livePnl, setLivePnl] = useState<number | null>(null)
   const [livePositions, setLivePositions] = useState<number | null>(null)
 
@@ -106,7 +105,6 @@ export default function Dashboard({ token }: DashboardProps) {
     const msg = lastMessage as WsMessage
 
     if (msg.type === 'status') {
-      setLiveBalance(msg.balance)
       setLivePnl(msg.pnl)
       setLivePositions(msg.positions)
     } else if (msg.type === 'trade_opened') {
