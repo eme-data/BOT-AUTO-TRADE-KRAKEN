@@ -12,6 +12,8 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  ShieldCheck,
+  ShieldOff,
 } from 'lucide-react'
 
 interface FieldMeta {
@@ -304,6 +306,9 @@ export default function Settings({ token }: { token: string }) {
         })}
       </div>
 
+      {/* 2FA Section */}
+      <TwoFactorSection api={api} />
+
       {/* Bot control */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 mt-6">
         <h3 className="text-lg font-semibold mb-4">Controle du bot</h3>
@@ -431,6 +436,199 @@ function SettingField({
         placeholder={String(meta.default ?? '')}
         className={baseInput}
       />
+    </div>
+  )
+}
+
+
+// ── 2FA Component ────────────────────────────────────
+
+function TwoFactorSection({ api }: { api: ReturnType<typeof useApi> }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [setupData, setSetupData] = useState<{ secret: string; qr_code: string } | null>(null)
+  const [verifyCode, setVerifyCode] = useState('')
+  const [disableCode, setDisableCode] = useState('')
+  const [showDisable, setShowDisable] = useState(false)
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const [working, setWorking] = useState(false)
+
+  useState(() => {
+    api.get('/auth/2fa/status')
+      .then(res => { setEnabled(res.data.enabled); setLoading(false) })
+      .catch(() => setLoading(false))
+  })
+
+  const handleSetup = async () => {
+    setWorking(true)
+    setMessage(null)
+    try {
+      const res = await api.post('/auth/2fa/setup')
+      setSetupData(res.data)
+    } catch {
+      setMessage({ text: 'Erreur lors de la configuration 2FA', type: 'error' })
+    } finally { setWorking(false) }
+  }
+
+  const handleVerify = async () => {
+    if (verifyCode.length !== 6) return
+    setWorking(true)
+    setMessage(null)
+    try {
+      await api.post('/auth/2fa/verify', { code: verifyCode })
+      setEnabled(true)
+      setSetupData(null)
+      setVerifyCode('')
+      setMessage({ text: '2FA active avec succes', type: 'success' })
+    } catch (err: any) {
+      setMessage({ text: err.response?.data?.detail || 'Code invalide', type: 'error' })
+    } finally { setWorking(false) }
+  }
+
+  const handleDisable = async () => {
+    if (disableCode.length !== 6) return
+    setWorking(true)
+    setMessage(null)
+    try {
+      await api.post('/auth/2fa/disable', { code: disableCode })
+      setEnabled(false)
+      setShowDisable(false)
+      setDisableCode('')
+      setMessage({ text: '2FA desactive', type: 'success' })
+    } catch (err: any) {
+      setMessage({ text: err.response?.data?.detail || 'Code invalide', type: 'error' })
+    } finally { setWorking(false) }
+  }
+
+  if (loading) return null
+
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mt-6">
+      <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-800 bg-gray-800/30">
+        <div className="text-blue-400"><ShieldCheck size={20} /></div>
+        <div>
+          <h3 className="font-semibold">Authentification a deux facteurs (2FA)</h3>
+          <p className="text-xs text-gray-500">Securisez votre compte avec Google Authenticator ou Authy</p>
+        </div>
+        <span className={`ml-auto px-2 py-0.5 rounded-full text-xs ${enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'}`}>
+          {enabled ? 'Active' : 'Desactive'}
+        </span>
+      </div>
+
+      <div className="p-6">
+        {message && (
+          <div className={`rounded-lg px-4 py-2 mb-4 text-sm ${message.type === 'success' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+            {message.text}
+          </div>
+        )}
+
+        {!enabled && !setupData && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-400">
+              Ajoutez une couche de securite supplementaire a votre compte.
+            </p>
+            <button
+              onClick={handleSetup}
+              disabled={working}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition disabled:opacity-50"
+            >
+              {working ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+              Activer le 2FA
+            </button>
+          </div>
+        )}
+
+        {setupData && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-300">
+              Scannez ce QR code avec votre application d'authentification :
+            </p>
+            <div className="flex justify-center">
+              <img
+                src={`data:image/png;base64,${setupData.qr_code}`}
+                alt="QR Code 2FA"
+                className="w-48 h-48 rounded-lg bg-white p-2"
+              />
+            </div>
+            <div className="bg-gray-800 rounded-lg p-3">
+              <p className="text-xs text-gray-500 mb-1">Cle secrete (saisie manuelle) :</p>
+              <p className="font-mono text-sm text-gray-300 select-all break-all">{setupData.secret}</p>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">Entrez le code a 6 chiffres :</label>
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={verifyCode}
+                  onChange={e => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  maxLength={6}
+                  placeholder="000000"
+                  className="w-40 px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 text-center text-lg tracking-widest focus:border-blue-500 focus:outline-none"
+                />
+                <button
+                  onClick={handleVerify}
+                  disabled={working || verifyCode.length !== 6}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-sm font-medium transition disabled:opacity-50"
+                >
+                  {working ? <Loader2 size={14} className="animate-spin" /> : 'Verifier'}
+                </button>
+                <button
+                  onClick={() => { setSetupData(null); setVerifyCode('') }}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition"
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {enabled && !showDisable && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-green-400">
+              La verification en deux etapes est active sur votre compte.
+            </p>
+            <button
+              onClick={() => setShowDisable(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm transition"
+            >
+              <ShieldOff size={14} />
+              Desactiver
+            </button>
+          </div>
+        )}
+
+        {enabled && showDisable && (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-300">Entrez un code 2FA pour confirmer la desactivation :</p>
+            <div className="flex gap-3">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={disableCode}
+                onChange={e => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                maxLength={6}
+                placeholder="000000"
+                className="w-40 px-4 py-2 bg-gray-800 rounded-lg border border-gray-700 text-center text-lg tracking-widest focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                onClick={handleDisable}
+                disabled={working || disableCode.length !== 6}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition disabled:opacity-50"
+              >
+                {working ? <Loader2 size={14} className="animate-spin" /> : 'Confirmer'}
+              </button>
+              <button
+                onClick={() => { setShowDisable(false); setDisableCode('') }}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

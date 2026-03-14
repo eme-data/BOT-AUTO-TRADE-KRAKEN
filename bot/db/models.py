@@ -30,6 +30,7 @@ class AdminUser(Base):
     username = Column(String(64), unique=True, nullable=False)
     hashed_password = Column(String(256), nullable=False)
     role = Column(String(16), nullable=False, default="viewer")  # admin / editor / viewer
+    totp_secret = Column(String(64), nullable=True)  # TOTP 2FA secret (None = disabled)
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

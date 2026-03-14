@@ -163,6 +163,105 @@ class ClaudeAnalyzer:
         )
         return await self.analyze(request)
 
+    # ── Post-trade review ─────────────────────────────
+
+    async def review_closed_trade(self, trade_data: dict) -> dict:
+        """Review a closed trade and return structured feedback.
+
+        Parameters
+        ----------
+        trade_data : dict
+            Must contain: pair, direction, entry_price, exit_price, profit,
+            duration_minutes, strategy.  Optional: size, fee, stop_loss,
+            take_profit.
+
+        Returns
+        -------
+        dict with keys: score, lessons_learned, what_went_well,
+        what_could_improve, reasoning, plus the full AIAnalysisResult fields.
+        """
+        pair = trade_data.get("pair", "N/A")
+        direction = trade_data.get("direction", "N/A")
+        strategy = trade_data.get("strategy", "N/A")
+
+        # Build extra_context with trade details
+        profit = trade_data.get("profit", 0.0)
+        entry = trade_data.get("entry_price", 0.0)
+        exit_ = trade_data.get("exit_price", 0.0)
+        duration = trade_data.get("duration_minutes", 0)
+        size = trade_data.get("size", 0.0)
+        fee = trade_data.get("fee", 0.0)
+        stop_loss = trade_data.get("stop_loss")
+        take_profit = trade_data.get("take_profit")
+
+        pct_change = ((exit_ - entry) / entry * 100) if entry else 0.0
+        if direction.upper() == "SELL":
+            pct_change = -pct_change
+
+        extra_lines = [
+            f"- Prix d'entree : {entry:.2f}",
+            f"- Prix de sortie : {exit_:.2f}",
+            f"- Variation : {pct_change:+.2f}%",
+            f"- Taille : {size}",
+            f"- Profit/Perte : {profit:+.2f} USD",
+            f"- Frais : {fee:.2f} USD",
+            f"- Duree : {duration} minutes",
+        ]
+        if stop_loss is not None:
+            extra_lines.append(f"- Stop-loss : {stop_loss:.2f}")
+        if take_profit is not None:
+            extra_lines.append(f"- Take-profit : {take_profit:.2f}")
+        extra_lines.append(f"- Resultat : {'GAGNANT' if profit >= 0 else 'PERDANT'}")
+
+        extra_context = "\n".join(extra_lines)
+
+        request = AIAnalysisRequest(
+            mode=AnalysisMode.POST_TRADE,
+            pair=pair,
+            signal_direction=direction,
+            signal_strategy=strategy,
+            extra_context=extra_context,
+        )
+
+        result = await self.analyze(request)
+
+        # Extract post-trade specific fields from raw response
+        score = 5
+        lessons_learned: list[str] = []
+        what_went_well: list[str] = []
+        what_could_improve: list[str] = []
+
+        if result.raw_response:
+            try:
+                raw = result.raw_response.strip()
+                if "```json" in raw:
+                    raw = raw.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw:
+                    raw = raw.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(raw)
+                score = int(parsed.get("score", 5))
+                score = max(1, min(10, score))
+                lessons_learned = parsed.get("lessons_learned", [])
+                what_went_well = parsed.get("what_went_well", [])
+                what_could_improve = parsed.get("what_could_improve", [])
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        return {
+            "score": score,
+            "lessons_learned": lessons_learned,
+            "what_went_well": what_went_well,
+            "what_could_improve": what_could_improve,
+            "verdict": result.verdict.value,
+            "confidence": result.confidence,
+            "reasoning": result.reasoning,
+            "risk_warnings": result.risk_warnings,
+            "market_summary": result.market_summary,
+            "suggested_adjustments": result.suggested_adjustments,
+            "model_used": result.model_used,
+            "latency_ms": result.latency_ms,
+        }
+
     # ── Claude API call ────────────────────────────────
 
     async def _call_claude(self, user_prompt: str) -> str:

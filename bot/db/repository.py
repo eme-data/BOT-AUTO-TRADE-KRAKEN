@@ -348,6 +348,16 @@ class AIAnalysisRepository:
         result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
+    async def get_by_mode(self, mode: str, limit: int = 30) -> list[AIAnalysisLog]:
+        stmt = (
+            select(AIAnalysisLog)
+            .where(AIAnalysisLog.mode == mode)
+            .order_by(AIAnalysisLog.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(self._user_filter(stmt))
+        return list(result.scalars().all())
+
     async def get_stats(self) -> dict[str, Any]:
         all_logs = await self.get_recent(limit=500)
         if not all_logs:

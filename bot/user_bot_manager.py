@@ -390,8 +390,96 @@ class UserBotContext:
                 repo = TradeRepository(session, user_id=self.user_id)
                 await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
             await self.publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
+
+            # Post-trade AI review (fire-and-forget)
+            if self.ai_analyzer.is_enabled and self.cfg.ai_post_trade_enabled:
+                asyncio.ensure_future(
+                    self._run_post_trade_review(
+                        pair=stop.pair,
+                        direction=stop.direction.value,
+                        entry_price=stop.entry_price,
+                        exit_price=tick.last,
+                        profit=profit,
+                        size=result.size,
+                        fee=result.fee,
+                        strategy=getattr(stop, "strategy", None),
+                        stop_loss=getattr(stop, "stop_loss", None),
+                        take_profit=getattr(stop, "take_profit", None),
+                    )
+                )
         except Exception as exc:
             logger.error("trailing_stop_close_error", user_id=self.user_id, order_id=order_id, error=str(exc))
+
+    async def _run_post_trade_review(
+        self,
+        pair: str,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        profit: float,
+        size: float = 0.0,
+        fee: float = 0.0,
+        strategy: str | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> None:
+        """Run AI post-trade review and save it to DB."""
+        from bot.db.repository import AIAnalysisRepository
+
+        try:
+            trade_data = {
+                "pair": pair,
+                "direction": direction,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "profit": profit,
+                "size": size,
+                "fee": fee,
+                "duration_minutes": 0,  # not tracked in trailing stop state
+                "strategy": strategy or "unknown",
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            }
+
+            review = await self.ai_analyzer.review_closed_trade(trade_data)
+
+            # Save as AIAnalysisLog with mode="post_trade"
+            async with get_session() as session:
+                ai_repo = AIAnalysisRepository(session, user_id=self.user_id)
+                await ai_repo.save(
+                    pair=pair,
+                    mode="post_trade",
+                    verdict=review.get("verdict", "APPROVE"),
+                    confidence=review.get("confidence", 0.0),
+                    reasoning=review.get("reasoning", ""),
+                    market_summary=review.get("market_summary", ""),
+                    risk_warnings=review.get("risk_warnings", []),
+                    suggested_adjustments={
+                        "score": review.get("score", 5),
+                        "lessons_learned": review.get("lessons_learned", []),
+                        "what_went_well": review.get("what_went_well", []),
+                        "what_could_improve": review.get("what_could_improve", []),
+                    },
+                    signal_direction=direction,
+                    signal_strategy=strategy or "unknown",
+                    model_used=review.get("model_used", ""),
+                    latency_ms=review.get("latency_ms", 0),
+                )
+
+            logger.info(
+                "post_trade_review_done",
+                user_id=self.user_id,
+                pair=pair,
+                score=review.get("score", 5),
+                profit=profit,
+            )
+        except Exception as exc:
+            logger.error(
+                "post_trade_review_error",
+                user_id=self.user_id,
+                pair=pair,
+                error=str(exc),
+            )
 
     async def _log_shadow_trade(self, signal) -> None:
         import time as _time

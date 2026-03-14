@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { useTradeNotifications } from '../hooks/useNotifications'
 import {
   LineChart,
   Line,
@@ -88,6 +89,7 @@ export default function Dashboard({ token }: DashboardProps) {
   const api = useApi(token)
   const { lastMessage: dashMsg, connected } = useWebSocket('/ws/dashboard')
   const { lastMessage: logMsg } = useWebSocket('/ws/logs')
+  useTradeNotifications(dashMsg)
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)

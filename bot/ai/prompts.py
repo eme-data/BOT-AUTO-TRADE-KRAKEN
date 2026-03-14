@@ -94,13 +94,14 @@ SENTIMENT_PROMPT = """Analyse le sentiment de marche pour {pair} en te basant su
 }}"""
 
 
-POST_TRADE_PROMPT = """Analyse ce trade cloture et fournis un retour d'experience.
+POST_TRADE_PROMPT = """Analyse ce trade cloture et fournis un retour d'experience detaille.
 
 ## Trade
 - Paire : {pair}
 - Direction : {direction}
 - Strategie : {strategy}
 
+## Details du trade
 {extra_context}
 
 ## Format de reponse attendu (JSON strict)
@@ -110,5 +111,15 @@ POST_TRADE_PROMPT = """Analyse ce trade cloture et fournis un retour d'experienc
   "reasoning": "Analyse du trade : ce qui a marche, ce qui aurait pu etre mieux, en 3-4 phrases",
   "risk_warnings": [],
   "market_summary": "",
-  "suggested_adjustments": {{}}
-}}"""
+  "suggested_adjustments": {{}},
+  "score": 5,
+  "lessons_learned": ["Lecon 1", "Lecon 2"],
+  "what_went_well": ["Point positif 1"],
+  "what_could_improve": ["Amelioration 1"]
+}}
+
+Notes pour le scoring :
+- score : note de 1 a 10 (1 = tres mauvais trade, 10 = trade parfait)
+- Evalue la qualite de l'entree, de la sortie, le respect du risk management
+- Sois objectif : un trade perdant peut avoir un bon score si l'execution etait correcte
+- Un trade gagnant peut avoir un mauvais score si c'etait de la chance"""

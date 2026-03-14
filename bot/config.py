@@ -79,7 +79,7 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "ai_pre_trade_enabled": {"label": "Validation pre-trade", "type": "toggle", "default": True},
         "ai_market_review_enabled": {"label": "Revue de marche periodique", "type": "toggle", "default": False},
         "ai_sentiment_enabled": {"label": "Analyse de sentiment", "type": "toggle", "default": False},
-        "ai_post_trade_enabled": {"label": "Analyse post-trade", "type": "toggle", "default": False},
+        "ai_post_trade_enabled": {"label": "Analyse post-trade", "type": "toggle", "default": True},
         "ai_min_confidence": {"label": "Confiance min. pour valider (%)", "type": "number", "default": 0.5},
     },
 }
@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     ai_pre_trade_enabled: bool = True
     ai_market_review_enabled: bool = False
     ai_sentiment_enabled: bool = False
-    ai_post_trade_enabled: bool = False
+    ai_post_trade_enabled: bool = True
     ai_min_confidence: float = 0.5
 
     # ── Derived ────────────────────────────────────────
@@ -245,7 +245,7 @@ class UserSettings:
         "ai_pre_trade_enabled": True,
         "ai_market_review_enabled": False,
         "ai_sentiment_enabled": False,
-        "ai_post_trade_enabled": False,
+        "ai_post_trade_enabled": True,
         "ai_min_confidence": 0.5,
     }
 

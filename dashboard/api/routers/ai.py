@@ -119,6 +119,36 @@ async def get_logs_by_pair(pair: str, limit: int = 20, user_id: int = Depends(ge
         ]
 
 
+# ── Post-trade reviews ────────────────────────────────
+
+@router.get("/post-trade-reviews")
+async def get_post_trade_reviews(limit: int = 30, user_id: int = Depends(get_user_id)):
+    """Get recent post-trade AI reviews."""
+    async with get_session() as session:
+        repo = AIAnalysisRepository(session, user_id=user_id)
+        logs = await repo.get_by_mode("post_trade", limit=limit)
+        return [
+            {
+                "id": l.id,
+                "pair": l.pair,
+                "mode": l.mode,
+                "verdict": l.verdict,
+                "confidence": l.confidence,
+                "reasoning": l.reasoning,
+                "signal_direction": l.signal_direction,
+                "signal_strategy": l.signal_strategy,
+                "score": (l.suggested_adjustments or {}).get("score"),
+                "lessons_learned": (l.suggested_adjustments or {}).get("lessons_learned", []),
+                "what_went_well": (l.suggested_adjustments or {}).get("what_went_well", []),
+                "what_could_improve": (l.suggested_adjustments or {}).get("what_could_improve", []),
+                "model_used": l.model_used,
+                "latency_ms": l.latency_ms,
+                "created_at": l.created_at.isoformat() if l.created_at else None,
+            }
+            for l in logs
+        ]
+
+
 # ── Stats ──────────────────────────────────────────────
 
 @router.get("/stats")

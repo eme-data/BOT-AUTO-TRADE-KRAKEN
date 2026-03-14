@@ -165,6 +165,68 @@ async def pnl_breakdown(
     }
 
 
+@router.get("/strategy-comparison")
+async def strategy_comparison(
+    days: int = Query(30, ge=1, le=365),
+    user_id: int = Depends(get_user_id),
+):
+    """Per-strategy detailed metrics for side-by-side comparison."""
+    trades = await _fetch_closed_trades(user_id, days)
+
+    strat_map: dict[str, list[Trade]] = defaultdict(list)
+    for t in trades:
+        strat_map[t.strategy or "unknown"].append(t)
+
+    result: list[dict[str, Any]] = []
+    for name, ts in sorted(strat_map.items()):
+        wins = [t for t in ts if t.profit and t.profit > 0]
+        losses = [t for t in ts if t.profit is not None and t.profit <= 0]
+
+        total_pnl = sum(t.profit for t in ts)
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = round(win_count / len(ts) * 100, 2) if ts else 0.0
+
+        avg_profit = round(total_pnl / len(ts), 2) if ts else 0.0
+        max_win = round(max((t.profit for t in wins), default=0.0), 2)
+        max_loss = round(min((t.profit for t in losses), default=0.0), 2)
+
+        gross_wins = sum(t.profit for t in wins)
+        gross_losses = abs(sum(t.profit for t in losses))
+        if gross_losses > 0:
+            profit_factor = round(gross_wins / gross_losses, 4)
+        elif gross_wins > 0:
+            profit_factor = None  # infinite
+        else:
+            profit_factor = None
+
+        # Average holding time in hours
+        holding_times: list[float] = []
+        for t in ts:
+            if t.opened_at and t.closed_at:
+                delta = (t.closed_at - t.opened_at).total_seconds() / 3600
+                holding_times.append(delta)
+        avg_holding_hours = round(
+            sum(holding_times) / len(holding_times), 2
+        ) if holding_times else None
+
+        result.append({
+            "strategy": name,
+            "total_trades": len(ts),
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "win_rate": win_rate,
+            "total_pnl": round(total_pnl, 2),
+            "avg_profit": avg_profit,
+            "max_win": max_win,
+            "max_loss": max_loss,
+            "profit_factor": profit_factor,
+            "avg_holding_hours": avg_holding_hours,
+        })
+
+    return result
+
+
 @router.get("/performance-summary")
 async def performance_summary(
     days: int = Query(30, ge=1, le=365),

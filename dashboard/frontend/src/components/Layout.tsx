@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse } from 'lucide-react'
+import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap } from 'lucide-react'
 import AltiorLogo from '../assets/AltiorLogo'
 import type { UserInfo } from '../App'
 
@@ -14,7 +14,9 @@ const NAV = [
   { to: '/', label: 'Dashboard', icon: BarChart3 },
   { to: '/trades', label: 'Trades', icon: History },
   { to: '/analytics', label: 'Analytics', icon: TrendingUp },
+  { to: '/compare', label: 'Comparaison', icon: GitCompareArrows },
   { to: '/journal', label: 'Journal', icon: BookOpen },
+  { to: '/strategies', label: 'Strategies', icon: Zap },
   { to: '/ai', label: 'Analyse IA', icon: Brain },
   { to: '/logs', label: 'Logs', icon: Terminal },
   { to: '/health', label: 'Health', icon: HeartPulse },
