@@ -124,7 +124,7 @@ export default function Dashboard({ token }: DashboardProps) {
   } | null>(null)
 
   // Autopilot toggle
-  const [autopilotEnabled, setAutopilotEnabled] = useState(false)
+  const [autopilotEnabled, setAutopilotEnabled] = useState(true)
   const [autopilotToggling, setAutopilotToggling] = useState(false)
 
   // Bot logs

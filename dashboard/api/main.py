@@ -17,6 +17,7 @@ from dashboard.api.routers import (
     bot_control,
     markets,
     polymarket,
+    push,
     settings_router,
     strategies,
     trades,
@@ -53,6 +54,7 @@ app.include_router(ai.router)
 app.include_router(strategies.router)
 app.include_router(users.router)
 app.include_router(polymarket.router)
+app.include_router(push.router)
 
 
 @app.get("/api/health")

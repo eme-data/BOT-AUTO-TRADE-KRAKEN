@@ -100,7 +100,7 @@ export default function App() {
   }
 
   return (
-    <Layout onLogout={() => setToken(null)} userInfo={userInfo}>
+    <Layout onLogout={() => setToken(null)} userInfo={userInfo} token={token}>
       <Routes>
         <Route path="/" element={<Dashboard token={token} />} />
         <Route path="/trades" element={<Trades token={token} />} />

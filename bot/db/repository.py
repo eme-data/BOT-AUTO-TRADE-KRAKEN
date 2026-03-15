@@ -14,6 +14,7 @@ from bot.db.models import (
     AppSetting,
     AuditLog,
     DailyPnL,
+    PushSubscription,
     SignalLog,
     StrategyState,
     Trade,
@@ -425,3 +426,40 @@ class AuditLogRepository:
         )
         result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
+
+
+class PushSubscriptionRepository:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def save(self, endpoint: str, p256dh: str, auth: str) -> PushSubscription:
+        stmt = select(PushSubscription).where(PushSubscription.endpoint == endpoint)
+        result = await self.session.execute(stmt)
+        sub = result.scalar_one_or_none()
+        if sub:
+            sub.p256dh = p256dh
+            sub.auth = auth
+            sub.user_id = self.user_id
+        else:
+            sub = PushSubscription(
+                user_id=self.user_id, endpoint=endpoint,
+                p256dh=p256dh, auth=auth,
+            )
+            self.session.add(sub)
+        await self.session.flush()
+        return sub
+
+    async def get_by_user(self, user_id: int) -> list[PushSubscription]:
+        stmt = select(PushSubscription).where(PushSubscription.user_id == user_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all(self) -> list[PushSubscription]:
+        result = await self.session.execute(select(PushSubscription))
+        return list(result.scalars().all())
+
+    async def delete_by_endpoint(self, endpoint: str) -> bool:
+        stmt = delete(PushSubscription).where(PushSubscription.endpoint == endpoint)
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0

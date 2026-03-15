@@ -378,6 +378,17 @@ class UserBotContext:
             except Exception:
                 pass
 
+        # Web Push notification (fire-and-forget)
+        try:
+            from bot.notifications_push import notify_trade_push
+            asyncio.ensure_future(notify_trade_push(
+                user_id=self.user_id, trade_type="trade_opened",
+                pair=signal.pair, direction=signal.direction.value,
+                price=result.price, size=size, strategy=signal.strategy_name,
+            ))
+        except Exception:
+            pass
+
         await notify_trade_opened(
             pair=signal.pair, direction=signal.direction.value,
             size=size, price=result.price, strategy=signal.strategy_name,
@@ -404,6 +415,31 @@ class UserBotContext:
                 repo = TradeRepository(session, user_id=self.user_id)
                 await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
             await self.publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
+
+            # Publish trade_closed event to Redis
+            if self._redis:
+                try:
+                    await self._redis.publish(
+                        self._rkey("trades"),
+                        json.dumps({
+                            "type": "trade_closed", "pair": stop.pair,
+                            "direction": stop.direction.value,
+                            "price": tick.last, "profit": profit,
+                        }),
+                    )
+                except Exception:
+                    pass
+
+            # Web Push notification (fire-and-forget)
+            try:
+                from bot.notifications_push import notify_trade_push
+                asyncio.ensure_future(notify_trade_push(
+                    user_id=self.user_id, trade_type="trade_closed",
+                    pair=stop.pair, direction=stop.direction.value,
+                    price=tick.last, profit=profit,
+                ))
+            except Exception:
+                pass
 
             # Post-trade AI review (fire-and-forget)
             if self.ai_analyzer.is_enabled and self.cfg.ai_post_trade_enabled:

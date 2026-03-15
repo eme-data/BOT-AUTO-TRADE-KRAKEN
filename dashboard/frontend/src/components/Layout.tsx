@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe } from 'lucide-react'
+import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe, Bell, BellOff } from 'lucide-react'
+import { usePushSubscription } from '../hooks/useNotifications'
 import AltiorLogo from '../assets/AltiorLogo'
 import type { UserInfo } from '../App'
 
@@ -8,6 +9,7 @@ interface LayoutProps {
   children: React.ReactNode
   onLogout: () => void
   userInfo?: UserInfo | null
+  token?: string
 }
 
 const NAV = [
@@ -26,9 +28,10 @@ const NAV = [
   { to: '/audit', label: 'Audit Log', icon: Shield, adminOnly: true },
 ]
 
-export default function Layout({ children, onLogout, userInfo }: LayoutProps) {
+export default function Layout({ children, onLogout, userInfo, token }: LayoutProps) {
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const { isSubscribed, isSupported, subscribe, unsubscribe } = usePushSubscription(token || '')
 
   const sidebar = (
     <>
@@ -71,6 +74,17 @@ export default function Layout({ children, onLogout, userInfo }: LayoutProps) {
               {userInfo.role}
             </span>
           </div>
+        )}
+        {isSupported && (
+          <button
+            onClick={isSubscribed ? unsubscribe : subscribe}
+            className={`flex items-center gap-2 text-sm transition w-full ${
+              isSubscribed ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {isSubscribed ? <BellOff size={16} /> : <Bell size={16} />}
+            {isSubscribed ? 'Alertes actives' : 'Activer alertes'}
+          </button>
         )}
         <button
           onClick={onLogout}
