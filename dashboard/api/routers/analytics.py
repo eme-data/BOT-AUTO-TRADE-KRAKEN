@@ -227,6 +227,88 @@ async def strategy_comparison(
     return result
 
 
+@router.get("/correlation")
+async def correlation(
+    days: int = Query(30, ge=1, le=365),
+    user_id: int = Depends(get_user_id),
+):
+    """Correlation matrix of daily P&L between traded pairs."""
+    trades = await _fetch_closed_trades(user_id, days)
+
+    # Group daily P&L by pair
+    pair_daily_pnl: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    all_dates: set[str] = set()
+
+    for t in trades:
+        if t.closed_at:
+            day = t.closed_at.strftime("%Y-%m-%d")
+        elif t.opened_at:
+            day = t.opened_at.strftime("%Y-%m-%d")
+        else:
+            continue
+        pair_daily_pnl[t.pair][day] += t.profit
+        all_dates.add(day)
+
+    pairs = sorted(pair_daily_pnl.keys())
+
+    # Need at least 2 pairs and 2 dates for meaningful correlation
+    if len(pairs) < 2 or len(all_dates) < 2:
+        # Return simulated correlation for common crypto pairs
+        common_pairs = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "DOT/USD"]
+        # Simulated correlations based on typical crypto market behaviour
+        simulated = [
+            [1.00, 0.85, 0.72, 0.65, 0.60, 0.58],
+            [0.85, 1.00, 0.78, 0.62, 0.58, 0.55],
+            [0.72, 0.78, 1.00, 0.55, 0.50, 0.52],
+            [0.65, 0.62, 0.55, 1.00, 0.68, 0.45],
+            [0.60, 0.58, 0.50, 0.68, 1.00, 0.48],
+            [0.58, 0.55, 0.52, 0.45, 0.48, 1.00],
+        ]
+        return {
+            "pairs": common_pairs,
+            "matrix": simulated,
+            "simulated": True,
+            "note": "Not enough trade data for real correlation. Showing simulated crypto correlations.",
+        }
+
+    sorted_dates = sorted(all_dates)
+
+    # Build vectors of daily P&L for each pair (aligned by date)
+    vectors: dict[str, list[float]] = {}
+    for pair in pairs:
+        vectors[pair] = [pair_daily_pnl[pair].get(d, 0.0) for d in sorted_dates]
+
+    # Pearson correlation
+    def _pearson(x: list[float], y: list[float]) -> float:
+        n = len(x)
+        if n < 2:
+            return 0.0
+        mean_x = sum(x) / n
+        mean_y = sum(y) / n
+        cov = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
+        std_x = math.sqrt(sum((xi - mean_x) ** 2 for xi in x))
+        std_y = math.sqrt(sum((yi - mean_y) ** 2 for yi in y))
+        if std_x == 0 or std_y == 0:
+            return 0.0
+        return round(cov / (std_x * std_y), 4)
+
+    matrix: list[list[float]] = []
+    for i, p1 in enumerate(pairs):
+        row: list[float] = []
+        for j, p2 in enumerate(pairs):
+            if i == j:
+                row.append(1.0)
+            else:
+                row.append(_pearson(vectors[p1], vectors[p2]))
+        matrix.append(row)
+
+    return {
+        "pairs": pairs,
+        "matrix": matrix,
+        "simulated": False,
+    }
+
+
 @router.get("/performance-summary")
 async def performance_summary(
     days: int = Query(30, ge=1, le=365),

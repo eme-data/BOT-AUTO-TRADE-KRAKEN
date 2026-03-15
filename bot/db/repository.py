@@ -13,7 +13,10 @@ from bot.db.models import (
     AIAnalysisLog,
     AppSetting,
     AuditLog,
+    CopyTradingLink,
     DailyPnL,
+    DCASchedule,
+    PriceAlert,
     PushSubscription,
     SignalLog,
     StrategyState,
@@ -461,5 +464,220 @@ class PushSubscriptionRepository:
 
     async def delete_by_endpoint(self, endpoint: str) -> bool:
         stmt = delete(PushSubscription).where(PushSubscription.endpoint == endpoint)
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+
+
+class PriceAlertRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def create(self, pair: str, condition: str, target_price: float, note: str | None = None) -> PriceAlert:
+        alert = PriceAlert(
+            user_id=self.user_id, pair=pair, condition=condition,
+            target_price=target_price, note=note,
+        )
+        self.session.add(alert)
+        await self.session.flush()
+        return alert
+
+    async def get_active(self) -> list[PriceAlert]:
+        stmt = (
+            select(PriceAlert)
+            .where(PriceAlert.user_id == self.user_id)
+            .where(PriceAlert.active.is_(True))
+            .where(PriceAlert.triggered.is_(False))
+            .order_by(PriceAlert.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all(self) -> list[PriceAlert]:
+        stmt = (
+            select(PriceAlert)
+            .where(PriceAlert.user_id == self.user_id)
+            .order_by(PriceAlert.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_all_active_global(self) -> list[PriceAlert]:
+        """Get all active alerts across all users (for the checker loop)."""
+        stmt = (
+            select(PriceAlert)
+            .where(PriceAlert.active.is_(True))
+            .where(PriceAlert.triggered.is_(False))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def trigger(self, alert_id: int) -> None:
+        stmt = (
+            update(PriceAlert)
+            .where(PriceAlert.id == alert_id)
+            .values(triggered=True, triggered_at=datetime.now(timezone.utc))
+        )
+        await self.session.execute(stmt)
+
+    async def delete(self, alert_id: int) -> bool:
+        stmt = (
+            delete(PriceAlert)
+            .where(PriceAlert.id == alert_id)
+            .where(PriceAlert.user_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+
+    async def toggle(self, alert_id: int, active: bool) -> None:
+        stmt = (
+            update(PriceAlert)
+            .where(PriceAlert.id == alert_id)
+            .where(PriceAlert.user_id == self.user_id)
+            .values(active=active)
+        )
+        await self.session.execute(stmt)
+
+
+class DCAScheduleRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def create(self, pair: str, amount_usd: float, frequency: str, next_run: datetime) -> DCASchedule:
+        sched = DCASchedule(
+            user_id=self.user_id, pair=pair, amount_usd=amount_usd,
+            frequency=frequency, next_run=next_run,
+        )
+        self.session.add(sched)
+        await self.session.flush()
+        return sched
+
+    async def get_all(self) -> list[DCASchedule]:
+        stmt = (
+            select(DCASchedule)
+            .where(DCASchedule.user_id == self.user_id)
+            .order_by(DCASchedule.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_due_global(self, now: datetime) -> list[DCASchedule]:
+        """Get all active DCA schedules that are due (across all users)."""
+        stmt = (
+            select(DCASchedule)
+            .where(DCASchedule.active.is_(True))
+            .where(DCASchedule.next_run <= now)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def record_execution(self, sched_id: int, amount_spent: float, amount_bought: float, next_run: datetime) -> None:
+        stmt = select(DCASchedule).where(DCASchedule.id == sched_id)
+        result = await self.session.execute(stmt)
+        sched = result.scalar_one_or_none()
+        if sched:
+            sched.last_run = datetime.now(timezone.utc)
+            sched.next_run = next_run
+            sched.total_invested = (sched.total_invested or 0) + amount_spent
+            sched.total_bought = (sched.total_bought or 0) + amount_bought
+            sched.executions = (sched.executions or 0) + 1
+
+    async def toggle(self, sched_id: int, active: bool) -> None:
+        stmt = (
+            update(DCASchedule)
+            .where(DCASchedule.id == sched_id)
+            .where(DCASchedule.user_id == self.user_id)
+            .values(active=active)
+        )
+        await self.session.execute(stmt)
+
+    async def delete(self, sched_id: int) -> bool:
+        stmt = (
+            delete(DCASchedule)
+            .where(DCASchedule.id == sched_id)
+            .where(DCASchedule.user_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+
+
+class CopyTradingRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def create_link(self, leader_id: int, multiplier: float = 1.0, max_per_trade: float | None = None) -> CopyTradingLink:
+        link = CopyTradingLink(
+            follower_id=self.user_id, leader_id=leader_id,
+            multiplier=multiplier, max_per_trade=max_per_trade,
+        )
+        self.session.add(link)
+        await self.session.flush()
+        return link
+
+    async def get_my_links(self) -> list[CopyTradingLink]:
+        """Links where I am the follower."""
+        stmt = (
+            select(CopyTradingLink)
+            .where(CopyTradingLink.follower_id == self.user_id)
+            .order_by(CopyTradingLink.created_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_followers(self, leader_id: int) -> list[CopyTradingLink]:
+        """Get all active followers of a leader."""
+        stmt = (
+            select(CopyTradingLink)
+            .where(CopyTradingLink.leader_id == leader_id)
+            .where(CopyTradingLink.active.is_(True))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_leaders_stats(self) -> list[dict]:
+        """Get performance stats for all potential leaders."""
+        stmt = select(AdminUser)
+        result = await self.session.execute(stmt)
+        users = list(result.scalars().all())
+
+        stats = []
+        for user in users:
+            trade_stmt = (
+                select(Trade)
+                .where(Trade.user_id == user.id)
+                .where(Trade.status == "CLOSED")
+            )
+            trade_result = await self.session.execute(trade_stmt)
+            trades = list(trade_result.scalars().all())
+            if not trades:
+                continue
+            total_pnl = sum(t.profit or 0 for t in trades)
+            wins = sum(1 for t in trades if (t.profit or 0) > 0)
+            stats.append({
+                "user_id": user.id,
+                "username": user.username,
+                "total_trades": len(trades),
+                "total_pnl": round(total_pnl, 2),
+                "win_rate": round(wins / len(trades) * 100, 1) if trades else 0,
+            })
+        return sorted(stats, key=lambda s: s["total_pnl"], reverse=True)
+
+    async def toggle(self, link_id: int, active: bool) -> None:
+        stmt = (
+            update(CopyTradingLink)
+            .where(CopyTradingLink.id == link_id)
+            .where(CopyTradingLink.follower_id == self.user_id)
+            .values(active=active)
+        )
+        await self.session.execute(stmt)
+
+    async def delete(self, link_id: int) -> bool:
+        stmt = (
+            delete(CopyTradingLink)
+            .where(CopyTradingLink.id == link_id)
+            .where(CopyTradingLink.follower_id == self.user_id)
+        )
         result = await self.session.execute(stmt)
         return result.rowcount > 0

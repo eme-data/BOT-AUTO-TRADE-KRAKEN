@@ -141,7 +141,7 @@ async def export_csv(days: Optional[int] = Query(30), user_id: int = Depends(get
     writer = csv.writer(buf)
     writer.writerow([
         "Date", "Pair", "Direction", "Size", "Entry Price",
-        "Exit Price", "Profit", "Fee", "Status", "Strategy",
+        "Exit Price", "P&L", "Fee", "Strategy", "Status",
     ])
     for t in trades:
         writer.writerow([
@@ -153,8 +153,8 @@ async def export_csv(days: Optional[int] = Query(30), user_id: int = Depends(get
             t.exit_price if t.exit_price is not None else "",
             round(t.profit, 2) if t.profit is not None else "",
             round(t.fee, 2) if t.fee else "0.00",
-            t.status,
             t.strategy or "",
+            t.status,
         ])
 
     buf.seek(0)
@@ -194,7 +194,7 @@ async def export_pdf(days: Optional[int] = Query(30), user_id: int = Depends(get
     elements = []
 
     # Title
-    elements.append(Paragraph("Trade Report &mdash; Altior Holding", title_style))
+    elements.append(Paragraph("Rapport de Trading &mdash; Altior Holding", title_style))
 
     # Date range
     now = datetime.now(timezone.utc)

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe, Bell, BellOff } from 'lucide-react'
+import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe, Bell, BellOff, FlaskConical, BellRing, Repeat, Copy, FileBarChart, Grid3X3 } from 'lucide-react'
 import { usePushSubscription } from '../hooks/useNotifications'
 import AltiorLogo from '../assets/AltiorLogo'
 import type { UserInfo } from '../App'
@@ -22,6 +22,12 @@ const NAV = [
   { to: '/polymarket', label: 'Polymarket', icon: Globe },
   { to: '/ai', label: 'Analyse IA', icon: Brain },
   { to: '/logs', label: 'Logs', icon: Terminal },
+  { to: '/backtest', label: 'Backtest', icon: FlaskConical },
+  { to: '/alerts', label: 'Alertes', icon: BellRing },
+  { to: '/dca', label: 'DCA', icon: Repeat },
+  { to: '/copy-trading', label: 'Copy Trading', icon: Copy },
+  { to: '/reports', label: 'Rapports', icon: FileBarChart },
+  { to: '/correlation', label: 'Correlation', icon: Grid3X3 },
   { to: '/health', label: 'Health', icon: HeartPulse },
   { to: '/settings', label: 'Settings', icon: Settings },
   { to: '/users', label: 'Utilisateurs', icon: Users, adminOnly: true },

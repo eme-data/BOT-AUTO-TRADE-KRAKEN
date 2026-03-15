@@ -65,6 +65,8 @@ class UserBotContext:
             "account_metrics": 0.0,
             "autopilot": 0.0,
             "redis_listener": 0.0,
+            "price_alerts": 0.0,
+            "dca": 0.0,
         }
         self._last_tick_at: float = 0.0
 
@@ -73,11 +75,22 @@ class UserBotContext:
             logger.info("user_bot_mode", user_id=user_id, mode="PAPER")
             self.broker = PaperBroker()
         else:
-            logger.info("user_bot_mode", user_id=user_id, mode="LIVE")
-            self.broker = KrakenRestClient(
-                api_key=self.cfg.kraken_api_key,
-                api_secret=self.cfg.kraken_api_secret,
-            )
+            exchange_id = getattr(self.cfg, "exchange_id", "kraken")
+            logger.info("user_bot_mode", user_id=user_id, mode="LIVE", exchange=exchange_id)
+            if exchange_id != "kraken":
+                from bot.broker.ccxt_broker import CCXTBroker
+                self.broker = CCXTBroker(
+                    exchange_id=exchange_id,
+                    api_key=self.cfg.kraken_api_key,
+                    api_secret=self.cfg.kraken_api_secret,
+                    password=getattr(self.cfg, "exchange_password", None) or None,
+                    quote_currency=getattr(self.cfg, "exchange_quote_currency", "USD"),
+                )
+            else:
+                self.broker = KrakenRestClient(
+                    api_key=self.cfg.kraken_api_key,
+                    api_secret=self.cfg.kraken_api_secret,
+                )
 
         self.ws_client = KrakenWSClient()
         self.data_mgr = HistoricalDataManager(self.broker)
@@ -134,6 +147,8 @@ class UserBotContext:
                 "account_metrics": _loop_status("account_metrics"),
                 "autopilot": _loop_status("autopilot"),
                 "redis_listener": _loop_status("redis_listener"),
+                "price_alerts": _loop_status("price_alerts"),
+                "dca": _loop_status("dca"),
             },
         }
 
@@ -220,9 +235,11 @@ class UserBotContext:
             self._account_metrics_loop(),
             self._autopilot_loop(),
             self._redis_command_listener(),
+            self._price_alert_loop(),
+            self._dca_loop(),
             return_exceptions=True,
         )
-        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener"]
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca"]
         for name, result in zip(task_names, results):
             if isinstance(result, Exception):
                 logger.error("user_task_crashed", user_id=self.user_id, task=name, error=str(result))
@@ -705,6 +722,108 @@ class UserBotContext:
                     await self.publish_log("ERROR", "autopilot_error", error=str(exc))
                 except Exception:
                     pass
+
+    async def _price_alert_loop(self) -> None:
+        """Check price alerts every 30 seconds."""
+        from bot.db.repository import PriceAlertRepository
+
+        while self._running:
+            await asyncio.sleep(30)
+            self._last_loop_run["price_alerts"] = _time_mod.time()
+            try:
+                async with get_session() as session:
+                    repo = PriceAlertRepository(session, user_id=self.user_id)
+                    alerts = await repo.get_active()
+                    for alert in alerts:
+                        try:
+                            ticker = await self.broker.get_ticker(alert.pair)
+                            triggered = False
+                            if alert.condition == "above" and ticker.last >= alert.target_price:
+                                triggered = True
+                            elif alert.condition == "below" and ticker.last <= alert.target_price:
+                                triggered = True
+                            if triggered:
+                                await repo.trigger(alert.id)
+                                await session.commit()
+                                # Send push notification
+                                try:
+                                    from bot.notifications_push import send_push_to_user
+                                    direction = "\u2191" if alert.condition == "above" else "\u2193"
+                                    await send_push_to_user(
+                                        self.user_id,
+                                        f"\U0001f514 Alerte {alert.pair}",
+                                        f"{direction} Prix atteint: {ticker.last:.2f} (seuil: {alert.target_price:.2f})",
+                                    )
+                                except Exception:
+                                    pass
+                                await self.publish_log(
+                                    "INFO", "price_alert_triggered",
+                                    pair=alert.pair, price=ticker.last, target=alert.target_price,
+                                )
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.debug("price_alert_check_error", error=str(exc))
+
+    async def _dca_loop(self) -> None:
+        """Execute due DCA orders every 60 seconds."""
+        from bot.db.repository import DCAScheduleRepository
+
+        while self._running:
+            await asyncio.sleep(60)
+            self._last_loop_run["dca"] = _time_mod.time()
+            try:
+                now = datetime.now(timezone.utc)
+                async with get_session() as session:
+                    repo = DCAScheduleRepository(session, user_id=self.user_id)
+                    all_scheds = await repo.get_all()
+                    for sched in all_scheds:
+                        if not sched.active or not sched.next_run or sched.next_run > now:
+                            continue
+                        try:
+                            ticker = await self.broker.get_ticker(sched.pair)
+                            size = sched.amount_usd / ticker.last
+                            if size <= 0:
+                                continue
+                            from bot.broker.models import OrderRequest, Direction
+                            order = OrderRequest(
+                                pair=sched.pair, direction=Direction.BUY,
+                                size=size, metadata={"source": "dca"},
+                            )
+                            result = await self.broker.open_position(order)
+
+                            # Calculate next run
+                            from datetime import timedelta
+                            freq_map = {
+                                "daily": timedelta(days=1),
+                                "weekly": timedelta(weeks=1),
+                                "biweekly": timedelta(weeks=2),
+                                "monthly": timedelta(days=30),
+                            }
+                            next_run = now + freq_map.get(sched.frequency, timedelta(days=1))
+
+                            await repo.record_execution(sched.id, sched.amount_usd, size, next_run)
+                            await session.commit()
+
+                            await self.publish_log(
+                                "INFO", "dca_executed",
+                                pair=sched.pair, amount=sched.amount_usd, size=size, price=ticker.last,
+                            )
+
+                            # Push notification
+                            try:
+                                from bot.notifications_push import send_push_to_user
+                                await send_push_to_user(
+                                    self.user_id,
+                                    f"\U0001f4b0 DCA {sched.pair}",
+                                    f"Achat {size:.6f} @ {ticker.last:.2f} ({sched.amount_usd} USD)",
+                                )
+                            except Exception:
+                                pass
+                        except Exception as exc:
+                            logger.warning("dca_execution_error", pair=sched.pair, error=str(exc))
+            except Exception as exc:
+                logger.debug("dca_loop_error", error=str(exc))
 
     async def _redis_command_listener(self) -> None:
         if not self._redis:

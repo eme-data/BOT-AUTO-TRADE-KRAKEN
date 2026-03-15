@@ -198,6 +198,59 @@ class PushSubscription(Base):
     )
 
 
+class PriceAlert(Base):
+    __tablename__ = "price_alerts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(32), nullable=False, index=True)
+    condition = Column(String(8), nullable=False)  # above / below
+    target_price = Column(Float, nullable=False)
+    triggered = Column(Boolean, default=False)
+    active = Column(Boolean, default=True)
+    note = Column(String(256), nullable=True)
+    triggered_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class DCASchedule(Base):
+    __tablename__ = "dca_schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(32), nullable=False)
+    amount_usd = Column(Float, nullable=False)
+    frequency = Column(String(16), nullable=False)  # daily / weekly / biweekly / monthly
+    active = Column(Boolean, default=True)
+    next_run = Column(DateTime(timezone=True), nullable=True)
+    last_run = Column(DateTime(timezone=True), nullable=True)
+    total_invested = Column(Float, default=0.0)
+    total_bought = Column(Float, default=0.0)
+    executions = Column(Integer, default=0)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class CopyTradingLink(Base):
+    __tablename__ = "copy_trading_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    follower_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    leader_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    active = Column(Boolean, default=True)
+    multiplier = Column(Float, default=1.0)  # position size multiplier
+    max_per_trade = Column(Float, nullable=True)  # max USD per copied trade
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class AIAnalysisLog(Base):
     __tablename__ = "ai_analysis_logs"
 

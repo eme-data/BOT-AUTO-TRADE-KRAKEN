@@ -11,13 +11,18 @@ from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.routers import (
     ai,
+    alerts,
     analytics,
     audit,
     auth,
+    backtest,
     bot_control,
+    copy_trading,
+    dca,
     markets,
     polymarket,
     push,
+    reports,
     settings_router,
     strategies,
     trades,
@@ -55,6 +60,11 @@ app.include_router(strategies.router)
 app.include_router(users.router)
 app.include_router(polymarket.router)
 app.include_router(push.router)
+app.include_router(alerts.router)
+app.include_router(backtest.router)
+app.include_router(copy_trading.router)
+app.include_router(dca.router)
+app.include_router(reports.router)
 
 
 @app.get("/api/health")

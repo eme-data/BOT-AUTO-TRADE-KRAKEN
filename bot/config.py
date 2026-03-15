@@ -27,6 +27,7 @@ _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 SENSITIVE_KEYS: set[str] = {
     "kraken_api_key",
     "kraken_api_secret",
+    "exchange_password",
     "telegram_bot_token",
     "ai_api_key",
 }
@@ -34,8 +35,21 @@ SENSITIVE_KEYS: set[str] = {
 # All settings manageable from the dashboard, grouped by category
 SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
     "kraken": {
+        "exchange_id": {
+            "label": "Exchange",
+            "type": "select",
+            "options": ["kraken", "binance", "coinbase", "okx", "bybit", "kucoin", "bitfinex", "gateio"],
+            "default": "kraken",
+        },
         "kraken_api_key": {"label": "API Key", "type": "password", "default": ""},
         "kraken_api_secret": {"label": "API Secret", "type": "password", "default": ""},
+        "exchange_password": {"label": "Exchange Password/Passphrase (si requis)", "type": "password", "default": ""},
+        "exchange_quote_currency": {
+            "label": "Devise de cotation",
+            "type": "select",
+            "options": ["USD", "USDT", "EUR", "USDC"],
+            "default": "USD",
+        },
         "kraken_acc_type": {
             "label": "Account Type",
             "type": "select",
@@ -123,8 +137,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # ── Trading settings (overridden by DB at runtime) ─
+    exchange_id: str = "kraken"
     kraken_api_key: str = ""
     kraken_api_secret: str = ""
+    exchange_password: str = ""
+    exchange_quote_currency: str = "USD"
     kraken_acc_type: Literal["LIVE", "DEMO"] = "DEMO"
 
     bot_max_daily_loss: float = -500.0
@@ -226,8 +243,11 @@ class UserSettings:
 
     # Defaults mirrored from Settings class / SETTINGS_SCHEMA
     _DEFAULTS: dict[str, Any] = {
+        "exchange_id": "kraken",
         "kraken_api_key": "",
         "kraken_api_secret": "",
+        "exchange_password": "",
+        "exchange_quote_currency": "USD",
         "kraken_acc_type": "DEMO",
         "bot_max_daily_loss": -500.0,
         "bot_max_position_size": 1.0,

@@ -16,6 +16,12 @@ import Health from './pages/Health'
 import Strategies from './pages/Strategies'
 import StrategyComparison from './pages/StrategyComparison'
 import Polymarket from './pages/Polymarket'
+import Backtest from './pages/Backtest'
+import Alerts from './pages/Alerts'
+import DCA from './pages/DCA'
+import CopyTrading from './pages/CopyTrading'
+import Reports from './pages/Reports'
+import Correlation from './pages/Correlation'
 import Layout from './components/Layout'
 
 function decodeJwt(token: string): Record<string, unknown> | null {
@@ -113,6 +119,12 @@ export default function App() {
         <Route path="/ai" element={<AIAnalysis token={token} />} />
         <Route path="/logs" element={<BotLogs token={token} />} />
         <Route path="/health" element={<Health token={token} />} />
+        <Route path="/backtest" element={<Backtest token={token} />} />
+        <Route path="/alerts" element={<Alerts token={token} />} />
+        <Route path="/dca" element={<DCA token={token} />} />
+        <Route path="/copy-trading" element={<CopyTrading token={token} />} />
+        <Route path="/reports" element={<Reports token={token} />} />
+        <Route path="/correlation" element={<Correlation token={token} />} />
         {userInfo?.role === 'admin' && (
           <>
             <Route path="/users" element={<UsersPage token={token} />} />

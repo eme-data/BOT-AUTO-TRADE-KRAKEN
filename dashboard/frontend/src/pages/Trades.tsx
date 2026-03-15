@@ -49,10 +49,18 @@ export default function Trades({ token }: { token: string }) {
     api.get(`/trades/stats?days=${days || ''}`).then((r) => setStats(r.data))
   }, [token, days])
 
-  const handleExport = (format: 'csv' | 'pdf') => {
+  const handleExport = async (format: 'csv' | 'pdf') => {
     const daysParam = days > 0 ? `days=${days}` : ''
-    const url = `/api/trades/export/${format}?${daysParam}&token=${token}`
-    window.open(url, '_blank')
+    const res = await fetch(`/api/trades/export/${format}?${daysParam}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `trades_${days || 'all'}d.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
