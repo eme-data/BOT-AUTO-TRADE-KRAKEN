@@ -251,6 +251,60 @@ class CopyTradingLink(Base):
     )
 
 
+class PortfolioTarget(Base):
+    __tablename__ = "portfolio_targets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(32), nullable=False)
+    target_pct = Column(Float, nullable=False)  # target allocation percentage
+    active = Column(Boolean, default=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class MarketJournalEntry(Base):
+    __tablename__ = "market_journal"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True, index=True)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+    summary = Column(Text, nullable=False)
+    sentiment = Column(String(16), nullable=True)  # bullish / bearish / neutral
+    key_events = Column(JSON, nullable=True)
+    market_data = Column(JSON, nullable=True)  # snapshot of prices at time of writing
+    model_used = Column(String(64), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ManualOrder(Base):
+    __tablename__ = "manual_orders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(32), nullable=False)
+    direction = Column(String(8), nullable=False)  # buy / sell
+    order_type = Column(String(16), nullable=False)  # market / limit / stop_limit
+    size = Column(Float, nullable=False)
+    price = Column(Float, nullable=True)  # for limit orders
+    stop_price = Column(Float, nullable=True)  # for stop-limit
+    status = Column(String(16), nullable=False, default="pending")  # pending / filled / cancelled
+    order_id = Column(String(128), nullable=True)  # exchange order ID
+    fill_price = Column(Float, nullable=True)
+    fee = Column(Float, default=0.0)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    filled_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class AIAnalysisLog(Base):
     __tablename__ = "ai_analysis_logs"
 

@@ -16,6 +16,34 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 # ── Telegram ──────────────────────────────────────────
 
+async def send_telegram_interactive(
+    text: str,
+    buttons: list[list[dict]],
+    chat_id: str | None = None,
+) -> None:
+    """Send a Telegram message with inline keyboard buttons."""
+    token = settings.telegram_bot_token
+    target = chat_id or settings.telegram_chat_id
+    if not token or not target:
+        return
+
+    import aiohttp
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": target,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_markup": {"inline_keyboard": buttons},
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as resp:
+                pass
+    except Exception:
+        pass
+
+
 async def send_telegram(message: str) -> bool:
     """Send a message via Telegram bot. Returns True on success."""
     token = settings.telegram_bot_token
@@ -78,7 +106,12 @@ async def _send_all(telegram_msg: str, discord_msg: str, embed: dict | None = No
 # ── Notification functions ────────────────────────────
 
 async def notify_trade_opened(
-    pair: str, direction: str, size: float, price: float, strategy: str
+    pair: str,
+    direction: str,
+    size: float,
+    price: float,
+    strategy: str,
+    order_id: str | None = None,
 ) -> None:
     telegram_msg = (
         f"\U0001f7e2 <b>Trade Opened</b>\n"
@@ -101,7 +134,17 @@ async def notify_trade_opened(
         ],
     }
 
-    await _send_all(telegram_msg, "", embed=discord_embed)
+    # Send interactive Telegram message with close button if order_id is available
+    if order_id and settings.telegram_bot_token and settings.telegram_chat_id:
+        buttons = [
+            [{"text": "\u274c Fermer", "callback_data": f"close:{order_id}"}]
+        ]
+        await send_telegram_interactive(telegram_msg, buttons)
+        # Send Discord separately (no interactive buttons for Discord)
+        if settings.discord_enabled:
+            await send_discord("", embed=discord_embed)
+    else:
+        await _send_all(telegram_msg, "", embed=discord_embed)
 
 
 async def notify_trade_closed(

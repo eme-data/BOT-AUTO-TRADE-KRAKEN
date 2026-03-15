@@ -16,6 +16,9 @@ from bot.db.models import (
     CopyTradingLink,
     DailyPnL,
     DCASchedule,
+    ManualOrder,
+    MarketJournalEntry,
+    PortfolioTarget,
     PriceAlert,
     PushSubscription,
     SignalLog,
@@ -678,6 +681,119 @@ class CopyTradingRepository:
             delete(CopyTradingLink)
             .where(CopyTradingLink.id == link_id)
             .where(CopyTradingLink.follower_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+
+
+class PortfolioTargetRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def get_all(self) -> list[PortfolioTarget]:
+        stmt = (
+            select(PortfolioTarget)
+            .where(PortfolioTarget.user_id == self.user_id)
+            .where(PortfolioTarget.active.is_(True))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def set_targets(self, targets: list[dict]) -> None:
+        """Replace all targets with a new set. Each dict: {pair, target_pct}."""
+        stmt = delete(PortfolioTarget).where(PortfolioTarget.user_id == self.user_id)
+        await self.session.execute(stmt)
+        for t in targets:
+            self.session.add(PortfolioTarget(
+                user_id=self.user_id, pair=t["pair"], target_pct=t["target_pct"],
+            ))
+        await self.session.flush()
+
+    async def delete(self, target_id: int) -> bool:
+        stmt = (
+            delete(PortfolioTarget)
+            .where(PortfolioTarget.id == target_id)
+            .where(PortfolioTarget.user_id == self.user_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+
+
+class MarketJournalRepository:
+    def __init__(self, session: AsyncSession, user_id: int | None = None) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def save(self, **kwargs) -> MarketJournalEntry:
+        if self.user_id is not None:
+            kwargs.setdefault("user_id", self.user_id)
+        entry = MarketJournalEntry(**kwargs)
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
+    async def get_recent(self, limit: int = 30) -> list[MarketJournalEntry]:
+        stmt = select(MarketJournalEntry).order_by(MarketJournalEntry.date.desc()).limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_by_date(self, date: datetime) -> MarketJournalEntry | None:
+        from sqlalchemy import func
+        stmt = (
+            select(MarketJournalEntry)
+            .where(func.date(MarketJournalEntry.date) == date.date())
+        )
+        if self.user_id is not None:
+            stmt = stmt.where(MarketJournalEntry.user_id == self.user_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+
+class ManualOrderRepository:
+    def __init__(self, session: AsyncSession, user_id: int) -> None:
+        self.session = session
+        self.user_id = user_id
+
+    async def create(self, **kwargs) -> ManualOrder:
+        kwargs["user_id"] = self.user_id
+        order = ManualOrder(**kwargs)
+        self.session.add(order)
+        await self.session.flush()
+        return order
+
+    async def get_all(self, status: str | None = None) -> list[ManualOrder]:
+        stmt = (
+            select(ManualOrder)
+            .where(ManualOrder.user_id == self.user_id)
+            .order_by(ManualOrder.created_at.desc())
+        )
+        if status:
+            stmt = stmt.where(ManualOrder.status == status)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def update_status(self, order_id: int, status: str, fill_price: float | None = None, fee: float = 0.0) -> None:
+        values: dict = {"status": status}
+        if fill_price is not None:
+            values["fill_price"] = fill_price
+            values["fee"] = fee
+            values["filled_at"] = datetime.now(timezone.utc)
+        stmt = (
+            update(ManualOrder)
+            .where(ManualOrder.id == order_id)
+            .where(ManualOrder.user_id == self.user_id)
+            .values(**values)
+        )
+        await self.session.execute(stmt)
+
+    async def cancel(self, order_id: int) -> bool:
+        stmt = (
+            update(ManualOrder)
+            .where(ManualOrder.id == order_id)
+            .where(ManualOrder.user_id == self.user_id)
+            .where(ManualOrder.status == "pending")
+            .values(status="cancelled")
         )
         result = await self.session.execute(stmt)
         return result.rowcount > 0

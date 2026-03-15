@@ -17,14 +17,20 @@ from dashboard.api.routers import (
     auth,
     backtest,
     bot_control,
+    calendar,
     copy_trading,
     dca,
+    manual_orders,
+    market_journal,
     markets,
+    permissions,
     polymarket,
+    portfolio,
     push,
     reports,
     settings_router,
     strategies,
+    telegram_webhook,
     trades,
     users,
     ws,
@@ -65,6 +71,12 @@ app.include_router(backtest.router)
 app.include_router(copy_trading.router)
 app.include_router(dca.router)
 app.include_router(reports.router)
+app.include_router(calendar.router)
+app.include_router(market_journal.router)
+app.include_router(manual_orders.router)
+app.include_router(permissions.router)
+app.include_router(portfolio.router)
+app.include_router(telegram_webhook.router)
 
 
 @app.get("/api/health")

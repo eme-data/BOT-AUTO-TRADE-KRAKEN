@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe, Bell, BellOff, FlaskConical, BellRing, Repeat, Copy, FileBarChart, Grid3X3 } from 'lucide-react'
+import { BarChart3, Settings, History, LogOut, Brain, Terminal, Menu, X, User, Users, TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe, Bell, BellOff, FlaskConical, BellRing, Repeat, Copy, FileBarChart, Grid3X3, Sun, Moon, Languages, PieChart, ShoppingCart, Newspaper, CalendarDays, Lock } from 'lucide-react'
 import { usePushSubscription } from '../hooks/useNotifications'
+import { useTheme } from '../hooks/useTheme'
+import { useTranslation } from '../i18n/useTranslation'
 import AltiorLogo from '../assets/AltiorLogo'
 import type { UserInfo } from '../App'
 
@@ -13,31 +15,38 @@ interface LayoutProps {
 }
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: BarChart3 },
-  { to: '/trades', label: 'Trades', icon: History },
-  { to: '/analytics', label: 'Analytics', icon: TrendingUp },
-  { to: '/compare', label: 'Comparaison', icon: GitCompareArrows },
-  { to: '/journal', label: 'Journal', icon: BookOpen },
-  { to: '/strategies', label: 'Strategies', icon: Zap },
-  { to: '/polymarket', label: 'Polymarket', icon: Globe },
-  { to: '/ai', label: 'Analyse IA', icon: Brain },
-  { to: '/logs', label: 'Logs', icon: Terminal },
-  { to: '/backtest', label: 'Backtest', icon: FlaskConical },
-  { to: '/alerts', label: 'Alertes', icon: BellRing },
-  { to: '/dca', label: 'DCA', icon: Repeat },
-  { to: '/copy-trading', label: 'Copy Trading', icon: Copy },
-  { to: '/reports', label: 'Rapports', icon: FileBarChart },
-  { to: '/correlation', label: 'Correlation', icon: Grid3X3 },
-  { to: '/health', label: 'Health', icon: HeartPulse },
-  { to: '/settings', label: 'Settings', icon: Settings },
-  { to: '/users', label: 'Utilisateurs', icon: Users, adminOnly: true },
-  { to: '/audit', label: 'Audit Log', icon: Shield, adminOnly: true },
+  { to: '/', labelKey: 'nav.dashboard', icon: BarChart3 },
+  { to: '/trades', labelKey: 'nav.trades', icon: History },
+  { to: '/analytics', labelKey: 'nav.analytics', icon: TrendingUp },
+  { to: '/compare', labelKey: 'nav.comparison', icon: GitCompareArrows },
+  { to: '/journal', labelKey: 'nav.journal', icon: BookOpen },
+  { to: '/strategies', labelKey: 'nav.strategies', icon: Zap },
+  { to: '/polymarket', labelKey: 'nav.polymarket', icon: Globe },
+  { to: '/ai', labelKey: 'nav.ai', icon: Brain },
+  { to: '/logs', labelKey: 'nav.logs', icon: Terminal },
+  { to: '/backtest', labelKey: 'nav.backtest', icon: FlaskConical },
+  { to: '/alerts', labelKey: 'nav.alerts', icon: BellRing },
+  { to: '/dca', labelKey: 'nav.dca', icon: Repeat },
+  { to: '/copy-trading', labelKey: 'nav.copy', icon: Copy },
+  { to: '/reports', labelKey: 'nav.reports', icon: FileBarChart },
+  { to: '/correlation', labelKey: 'nav.correlation', icon: Grid3X3 },
+  { to: '/portfolio', labelKey: 'nav.portfolio', icon: PieChart },
+  { to: '/orders', labelKey: 'nav.orders', icon: ShoppingCart },
+  { to: '/market-journal', labelKey: 'nav.market_journal', icon: Newspaper },
+  { to: '/calendar', labelKey: 'nav.calendar', icon: CalendarDays },
+  { to: '/health', labelKey: 'nav.health', icon: HeartPulse },
+  { to: '/settings', labelKey: 'nav.settings', icon: Settings },
+  { to: '/users', labelKey: 'nav.users', icon: Users, adminOnly: true },
+  { to: '/audit', labelKey: 'nav.audit', icon: Shield, adminOnly: true },
+  { to: '/permissions', labelKey: 'nav.permissions', icon: Lock, adminOnly: true },
 ]
 
 export default function Layout({ children, onLogout, userInfo, token }: LayoutProps) {
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
   const { isSubscribed, isSupported, subscribe, unsubscribe } = usePushSubscription(token || '')
+  const { theme, toggleTheme } = useTheme()
+  const { t, lang, switchLang } = useTranslation()
 
   const sidebar = (
     <>
@@ -50,7 +59,7 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
       </div>
 
       <nav className="flex-1 px-4 space-y-1">
-        {NAV.filter(item => !item.adminOnly || userInfo?.role === 'admin').map(({ to, label, icon: Icon }) => {
+        {NAV.filter(item => !item.adminOnly || userInfo?.role === 'admin').map(({ to, labelKey, icon: Icon }) => {
           const active = location.pathname === to
           return (
             <Link
@@ -64,7 +73,7 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
               }`}
             >
               <Icon size={18} />
-              {label}
+              {t(labelKey)}
             </Link>
           )
         })}
@@ -81,6 +90,25 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
             </span>
           </div>
         )}
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition w-full"
+        >
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          {theme === 'dark' ? t('theme.light') : t('theme.dark')}
+        </button>
+
+        {/* Language toggle */}
+        <button
+          onClick={switchLang}
+          className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-300 transition w-full"
+        >
+          <Languages size={16} />
+          {lang === 'fr' ? 'EN' : 'FR'}
+        </button>
+
         {isSupported && (
           <button
             onClick={isSubscribed ? unsubscribe : subscribe}
@@ -89,7 +117,7 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
             }`}
           >
             {isSubscribed ? <BellOff size={16} /> : <Bell size={16} />}
-            {isSubscribed ? 'Alertes actives' : 'Activer alertes'}
+            {isSubscribed ? t('common.alerts_active') : t('common.enable_alerts')}
           </button>
         )}
         <button
@@ -97,7 +125,7 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
           className="flex items-center gap-2 text-gray-500 hover:text-red-400 text-sm transition"
         >
           <LogOut size={16} />
-          Logout
+          {t('common.logout')}
         </button>
       </div>
     </>
@@ -138,7 +166,23 @@ export default function Layout({ children, onLogout, userInfo, token }: LayoutPr
       )}
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto p-4 md:p-8 pt-16 md:pt-8">{children}</main>
+      <main className="flex-1 overflow-auto p-4 md:p-8 pt-16 md:pt-8 pb-16 md:pb-0">{children}</main>
+
+      {/* Mobile bottom navigation */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-gray-900 border-t border-gray-800 flex justify-around py-2">
+        {[
+          { to: '/', icon: BarChart3, label: 'Home' },
+          { to: '/trades', icon: History, label: 'Trades' },
+          { to: '/alerts', icon: BellRing, label: 'Alertes' },
+          { to: '/portfolio', icon: PieChart, label: 'Portfolio' },
+          { to: '/settings', icon: Settings, label: 'Settings' },
+        ].map(({ to, icon: Icon, label }) => (
+          <Link key={to} to={to} className={`flex flex-col items-center gap-0.5 px-3 py-1 ${location.pathname === to ? 'text-blue-400' : 'text-gray-500'}`}>
+            <Icon size={20} />
+            <span className="text-[10px]">{label}</span>
+          </Link>
+        ))}
+      </nav>
     </div>
   )
 }

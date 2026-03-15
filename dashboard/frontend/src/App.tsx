@@ -22,6 +22,11 @@ import DCA from './pages/DCA'
 import CopyTrading from './pages/CopyTrading'
 import Reports from './pages/Reports'
 import Correlation from './pages/Correlation'
+import Portfolio from './pages/Portfolio'
+import ManualOrders from './pages/ManualOrders'
+import MarketJournal from './pages/MarketJournal'
+import Calendar from './pages/Calendar'
+import Permissions from './pages/Permissions'
 import Layout from './components/Layout'
 
 function decodeJwt(token: string): Record<string, unknown> | null {
@@ -125,10 +130,15 @@ export default function App() {
         <Route path="/copy-trading" element={<CopyTrading token={token} />} />
         <Route path="/reports" element={<Reports token={token} />} />
         <Route path="/correlation" element={<Correlation token={token} />} />
+        <Route path="/portfolio" element={<Portfolio token={token} />} />
+        <Route path="/orders" element={<ManualOrders token={token} />} />
+        <Route path="/market-journal" element={<MarketJournal token={token} />} />
+        <Route path="/calendar" element={<Calendar token={token} />} />
         {userInfo?.role === 'admin' && (
           <>
             <Route path="/users" element={<UsersPage token={token} />} />
             <Route path="/audit" element={<AuditLog token={token} />} />
+            <Route path="/permissions" element={<Permissions token={token} />} />
           </>
         )}
         <Route path="*" element={<Navigate to="/" />} />
