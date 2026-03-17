@@ -115,7 +115,7 @@ class UserBotContext:
             try:
                 from bot.data.polymarket import PolymarketClient
                 self.polymarket_client = PolymarketClient(
-                    cache_ttl=getattr(self.cfg, "polymarket_cache_ttl_minutes", 15) * 60,
+                    cache_ttl_seconds=getattr(self.cfg, "polymarket_cache_ttl_minutes", 15) * 60,
                 )
                 logger.info("polymarket_enabled", user_id=user_id)
             except Exception as exc:
