@@ -396,6 +396,18 @@ class UserBotContext:
         if size <= 0:
             return
 
+        # Hard cap: never exceed 15% of available balance
+        max_pct = getattr(self.cfg, "risk_max_position_pct", 0.15)
+        if ticker.last > 0:
+            max_size = (balance.available_balance * max_pct) / ticker.last
+            if size > max_size:
+                logger.info("size_capped", pair=signal.pair,
+                            original=size, capped=max_size,
+                            balance=balance.available_balance, price=ticker.last)
+                size = max_size
+        if size <= 0:
+            return
+
         order = OrderRequest(
             pair=signal.pair, direction=signal.direction, size=size,
             stop_loss_pct=signal.stop_loss_pct, take_profit_pct=signal.take_profit_pct,
