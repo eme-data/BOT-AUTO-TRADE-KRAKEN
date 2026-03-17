@@ -17,25 +17,28 @@ def _get_real_broker(broker) -> KrakenRestClient:
         return broker.real_broker
     return broker
 
-# Default pairs to scan when in discovery mode
-DEFAULT_DISCOVERY_PAIRS: list[str] = [
+# Base assets to scan (quote currency is added dynamically)
+_BASE_ASSETS: list[str] = [
     # ── Top caps ──────────────────────────────
-    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD",
-    "DOT/USD", "AVAX/USD", "LINK/USD", "ATOM/USD", "LTC/USD",
+    "BTC", "ETH", "SOL", "XRP", "ADA",
+    "DOT", "AVAX", "LINK", "ATOM", "LTC",
     # ── Meme coins ────────────────────────────
-    "DOGE/USD", "SHIB/USD", "PEPE/USD", "FLOKI/USD", "BONK/USD",
+    "DOGE", "SHIB", "PEPE", "FLOKI", "BONK",
     # ── DeFi / Layer 2 ───────────────────────
-    "UNI/USD", "AAVE/USD", "MKR/USD", "CRV/USD", "LDO/USD",
-    "ARB/USD", "OP/USD", "MATIC/USD", "IMX/USD",
+    "UNI", "AAVE", "MKR", "CRV", "LDO",
+    "ARB", "OP", "MATIC", "IMX",
     # ── Ecosystemes ──────────────────────────
-    "NEAR/USD", "APT/USD", "SUI/USD", "SEI/USD", "INJ/USD",
-    "FIL/USD", "RENDER/USD", "FET/USD", "GRT/USD",
+    "NEAR", "APT", "SUI", "SEI", "INJ",
+    "FIL", "RENDER", "FET", "GRT",
     # ── Autres altcoins ──────────────────────
-    "BCH/USD", "ALGO/USD", "XLM/USD", "VET/USD", "SAND/USD",
-    "MANA/USD", "ENS/USD", "COMP/USD",
-    # ── EUR variants ─────────────────────────
-    "BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR",
+    "BCH", "ALGO", "XLM", "VET", "SAND",
+    "MANA", "ENS", "COMP",
 ]
+
+
+def get_discovery_pairs(quote: str = "USD") -> list[str]:
+    """Build discovery pair list for the given quote currency."""
+    return [f"{base}/{quote}" for base in _BASE_ASSETS]
 
 # Quote currencies we trade against
 ALLOWED_QUOTES = {"USD", "EUR", "USDT"}
@@ -44,15 +47,16 @@ ALLOWED_QUOTES = {"USD", "EUR", "USDT"}
 class MarketScanner:
     """Discovers and filters tradeable pairs on Kraken."""
 
-    def __init__(self, broker) -> None:
+    def __init__(self, broker, quote_currency: str = "USD") -> None:
         self._broker = broker
         self._real_broker = _get_real_broker(broker)
+        self._quote = quote_currency
 
     async def scan_discovery(
         self, custom_pairs: list[str] | None = None
     ) -> list[ScanResult]:
         """Scan a predefined list of pairs."""
-        pairs_to_check = custom_pairs or DEFAULT_DISCOVERY_PAIRS
+        pairs_to_check = custom_pairs or get_discovery_pairs(self._quote)
         results: list[ScanResult] = []
 
         markets = self._real_broker.exchange.markets

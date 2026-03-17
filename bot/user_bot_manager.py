@@ -216,6 +216,7 @@ class UserBotContext:
             redis_client=self._redis,
             user_id=self.user_id,
             polymarket_client=self.polymarket_client,
+            quote_currency=getattr(self.cfg, "exchange_quote_currency", "USD"),
         )
         self.autopilot.enabled = self.cfg.autopilot_enabled
 
