@@ -678,7 +678,11 @@ class UserBotContext:
             self._last_loop_run["bar_update"] = _time_mod.time()
             if not self.cfg.is_configured:
                 continue
-            for pair in list(self._active_pairs):
+            # Merge default pairs + autopilot-activated pairs
+            all_pairs = set(self._active_pairs)
+            if self.autopilot and self.autopilot.active_scores:
+                all_pairs.update(self.autopilot.active_scores.keys())
+            for pair in list(all_pairs):
                 try:
                     df = await self.data_mgr.get_bars(pair, interval_minutes=60, count=250)
                     if df.empty:
