@@ -359,8 +359,18 @@ class UserBotContext:
         ).inc()
 
         from bot.strategies.base import SignalType
+        from bot.broker.models import Direction
         if signal.signal_type == SignalType.HOLD:
             return
+
+        # Spot exchange: can only SELL assets we own
+        if signal.direction == Direction.SELL:
+            owned = await self.broker.get_open_positions()
+            has_asset = any(p.pair == signal.pair and p.size > 0 for p in owned)
+            if not has_asset:
+                await self.publish_log("INFO", "sell_skipped_no_position",
+                                       pair=signal.pair, strategy=signal.strategy_name)
+                return
 
         positions = await self.broker.get_open_positions()
         balance = await self.broker.get_account_balance()
@@ -422,6 +432,7 @@ class UserBotContext:
             pass
 
         logger.info("order_sizing", pair=signal.pair,
+                     direction=signal.direction.value,
                      balance=round(balance.available_balance, 2),
                      order_value=round(order_value, 2),
                      size=round(size, 8), price=ticker.last)
