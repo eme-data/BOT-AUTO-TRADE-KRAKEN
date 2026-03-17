@@ -112,10 +112,11 @@ def _auto_retry(max_retries: int = 3, delay: float = 5.0):
 class KrakenRestClient(AbstractBroker):
     """Kraken exchange client built on ccxt async."""
 
-    def __init__(self, api_key: str | None = None, api_secret: str | None = None) -> None:
+    def __init__(self, api_key: str | None = None, api_secret: str | None = None, quote_currency: str = "USD") -> None:
         self._exchange: ccxt.kraken | None = None
         self._api_key = api_key
         self._api_secret = api_secret
+        self._quote = quote_currency
         self.circuit_breaker = CircuitBreaker()
         self.rate_limiter = KrakenRateLimiter(max_tokens=15, refill_rate=1.0)
         self.matching_limiter = KrakenRateLimiter(max_tokens=60, refill_rate=1.0)
@@ -270,12 +271,13 @@ class KrakenRestClient(AbstractBroker):
         balance = await self.exchange.fetch_balance()
         positions: list[Position] = []
         for currency, amount_info in balance.get("total", {}).items():
-            if currency in ("USD", "EUR", "ZUSD", "ZEUR"):
+            fiat = {"USD", "EUR", "ZUSD", "ZEUR", "USDT", "USDC"}
+            if currency in fiat:
                 continue
             total = float(amount_info) if amount_info else 0.0
             if total <= 0:
                 continue
-            pair = f"{currency}/USD"
+            pair = f"{currency}/{self._quote}"
             try:
                 ticker = await self.get_ticker(pair)
                 current_price = ticker.last
@@ -295,12 +297,20 @@ class KrakenRestClient(AbstractBroker):
     @_auto_retry()
     async def get_account_balance(self) -> AccountBalance:
         balance = await self.exchange.fetch_balance()
-        free = float(balance.get("free", {}).get("USD", 0) or 0)
-        total = float(balance.get("total", {}).get("USD", 0) or 0)
+        # Try configured quote currency, then common fallbacks
+        for cur in [self._quote, f"Z{self._quote}", self._quote.upper()]:
+            free = float(balance.get("free", {}).get(cur, 0) or 0)
+            total = float(balance.get("total", {}).get(cur, 0) or 0)
+            if total > 0 or free > 0:
+                return AccountBalance(
+                    total_balance=total,
+                    available_balance=free,
+                    currency=self._quote,
+                )
         return AccountBalance(
-            total_balance=total,
-            available_balance=free,
-            currency="USD",
+            total_balance=0.0,
+            available_balance=0.0,
+            currency=self._quote,
         )
 
     @_auto_retry()

@@ -100,6 +100,7 @@ class UserBotContext:
                 self.broker = KrakenRestClient(
                     api_key=self.cfg.kraken_api_key,
                     api_secret=self.cfg.kraken_api_secret,
+                    quote_currency=getattr(self.cfg, "exchange_quote_currency", "USD"),
                 )
 
         self.ws_client = KrakenWSClient()
@@ -222,7 +223,8 @@ class UserBotContext:
 
         await self.ws_client.connect()
 
-        default_pairs = ["BTC/USD", "ETH/USD", "SOL/USD"]
+        quote = getattr(self.cfg, "exchange_quote_currency", "USD")
+        default_pairs = [f"BTC/{quote}", f"ETH/{quote}", f"SOL/{quote}"]
         await self.ws_client.subscribe_ticker(default_pairs)
         self._active_pairs.update(default_pairs)
 
