@@ -390,26 +390,25 @@ class UserBotContext:
                     signal.take_profit_pct = float(adj["take_profit_pct"])
 
         ticker = await self.broker.get_ticker(signal.pair)
-        logger.info("pre_order_debug", pair=signal.pair,
-                     balance=balance.available_balance, currency=balance.currency,
-                     price=ticker.last)
-        size = self.risk_manager.calculate_position_size(signal, balance, ticker.last)
+
+        # Simple position sizing: fixed % of available balance in quote currency
+        max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
+        order_value = balance.available_balance * max_pct
+        if ticker.last <= 0 or order_value < 1.0:
+            return
+        size = order_value / ticker.last
+
+        # AI adjustment (optional)
         if ai_result and ai_result.suggested_adjustments.get("size_factor") is not None:
             size *= float(ai_result.suggested_adjustments["size_factor"])
+
         if size <= 0:
             return
 
-        # Hard cap: never exceed 15% of available balance
-        max_pct = getattr(self.cfg, "risk_max_position_pct", 0.15)
-        if ticker.last > 0:
-            max_size = (balance.available_balance * max_pct) / ticker.last
-            if size > max_size:
-                logger.info("size_capped", pair=signal.pair,
-                            original=size, capped=max_size,
-                            balance=balance.available_balance, price=ticker.last)
-                size = max_size
-        if size <= 0:
-            return
+        logger.info("order_sizing", pair=signal.pair,
+                     balance=round(balance.available_balance, 2),
+                     order_value=round(order_value, 2),
+                     size=size, price=ticker.last)
 
         order = OrderRequest(
             pair=signal.pair, direction=signal.direction, size=size,
