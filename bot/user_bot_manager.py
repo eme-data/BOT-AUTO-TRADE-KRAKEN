@@ -59,6 +59,16 @@ class UserBotContext:
         self._running = False
         self._started_at: float | None = None
 
+        # Drawdown protection
+        self._daily_pnl: float = 0.0
+        self._daily_pnl_reset_date: str = ""
+        self._trading_paused: bool = False
+        self._pause_reason: str = ""
+
+        # Anomaly detection
+        from bot.anomaly_detector import AnomalyDetector
+        self.anomaly_detector = AnomalyDetector()
+
         # Health tracking – each loop writes its timestamp here
         self._last_loop_run: dict[str, float] = {
             "bar_update": 0.0,
@@ -142,6 +152,9 @@ class UserBotContext:
             "active_pairs": sorted(self._active_pairs),
             "active_pairs_count": len(self._active_pairs),
             "mode": "PAPER" if self.cfg.bot_paper_trading else "LIVE",
+            "daily_pnl": round(self._daily_pnl, 2),
+            "trading_paused": self._trading_paused,
+            "pause_reason": self._pause_reason,
             "loops_status": {
                 "bar_update": _loop_status("bar_update"),
                 "account_metrics": _loop_status("account_metrics"),
@@ -280,6 +293,47 @@ class UserBotContext:
         for signal in signals:
             await self._process_signal(signal)
 
+    def _check_drawdown_protection(self) -> bool:
+        """Reset daily PnL at midnight, pause if max loss exceeded. Returns True if paused."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != self._daily_pnl_reset_date:
+            self._daily_pnl = 0.0
+            self._daily_pnl_reset_date = today
+            if self._trading_paused:
+                self._trading_paused = False
+                self._pause_reason = ""
+                logger.info("trading_unpaused_new_day", user_id=self.user_id)
+
+        max_loss_pct = getattr(self.cfg, "risk_max_daily_loss_pct", 0.05)
+        if max_loss_pct > 0 and self._daily_pnl < 0:
+            # Rough balance estimate – use 100 as fallback
+            balance = 100.0
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if not loop.is_running():
+                    bal = loop.run_until_complete(self.broker.get_account_balance())
+                    balance = bal.available_balance or 100.0
+            except Exception:
+                pass
+            threshold = -abs(max_loss_pct) * balance
+            if self._daily_pnl <= threshold and not self._trading_paused:
+                self._trading_paused = True
+                self._pause_reason = f"Daily loss limit: {self._daily_pnl:.2f} (threshold: {threshold:.2f})"
+                logger.warning("trading_paused_drawdown", user_id=self.user_id, daily_pnl=self._daily_pnl, threshold=threshold)
+                asyncio.ensure_future(self.publish_log("WARNING", "trading_paused", reason=self._pause_reason))
+                try:
+                    from bot.notifications_push import send_push_to_user
+                    asyncio.ensure_future(send_push_to_user(
+                        self.user_id,
+                        "Trading en pause",
+                        self._pause_reason,
+                        tag="drawdown",
+                    ))
+                except Exception:
+                    pass
+        return self._trading_paused
+
     async def _process_signal(self, signal) -> None:
         import time as _time
         from bot.broker.models import OrderRequest
@@ -291,6 +345,11 @@ class UserBotContext:
         )
         from bot.notifications import notify_error, notify_trade_opened
         from bot.risk.trailing_stop import TrailingStopState
+
+        # Drawdown protection check
+        if self._check_drawdown_protection():
+            await self.publish_log("INFO", "signal_skipped_paused", pair=signal.pair, reason=self._pause_reason)
+            return
 
         signals_generated_counter.labels(
             strategy=signal.strategy_name, signal_type=signal.signal_type.value
@@ -428,6 +487,7 @@ class UserBotContext:
             self.trailing_stop_mgr.unregister(order_id)
             profit = (tick.last - stop.entry_price) * result.size if stop.direction == Direction.BUY else (stop.entry_price - tick.last) * result.size
             self.risk_manager.update_daily_pnl(profit)
+            self._daily_pnl += profit
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
                 await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
@@ -630,6 +690,26 @@ class UserBotContext:
                             df_d1 = None
                     except Exception:
                         df_d1 = None
+                    # Anomaly detection
+                    anomalies = self.anomaly_detector.check(pair, df)
+                    for a in anomalies:
+                        await self.publish_log(
+                            "WARNING" if a.severity in ("medium", "low") else "ERROR",
+                            f"anomaly_{a.type}",
+                            pair=a.pair, severity=a.severity, message=a.message,
+                        )
+                        if a.severity in ("high", "critical"):
+                            try:
+                                from bot.notifications_push import send_push_to_user
+                                asyncio.ensure_future(send_push_to_user(
+                                    self.user_id,
+                                    f"Anomalie {a.pair}",
+                                    a.message,
+                                    tag=f"anomaly-{a.pair}",
+                                ))
+                            except Exception:
+                                pass
+
                     if df_d1 is not None:
                         signals = self.strategy_registry.dispatch_bar_mtf(pair, df, df_d1)
                     else:

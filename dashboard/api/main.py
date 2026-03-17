@@ -20,6 +20,7 @@ from dashboard.api.routers import (
     calendar,
     copy_trading,
     dca,
+    fees,
     manual_orders,
     market_journal,
     markets,
@@ -28,8 +29,10 @@ from dashboard.api.routers import (
     portfolio,
     push,
     reports,
+    sessions,
     settings_router,
     strategies,
+    targets,
     telegram_webhook,
     trades,
     users,
@@ -77,6 +80,17 @@ app.include_router(manual_orders.router)
 app.include_router(permissions.router)
 app.include_router(portfolio.router)
 app.include_router(telegram_webhook.router)
+app.include_router(fees.router)
+app.include_router(targets.router)
+app.include_router(sessions.router)
+
+
+# Rate limiting middleware
+try:
+    from dashboard.api.middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+except ImportError:
+    pass
 
 
 @app.get("/api/health")

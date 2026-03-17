@@ -5,7 +5,7 @@ import {
   TrendingUp, BookOpen, Shield, HeartPulse, GitCompareArrows, Zap, Globe,
   Bell, BellOff, FlaskConical, BellRing, Repeat, Copy, FileBarChart, Grid3X3,
   Sun, Moon, PieChart, ShoppingCart, Newspaper, CalendarDays, Lock,
-  ChevronDown,
+  ChevronDown, Target, Monitor,
 } from 'lucide-react'
 import { usePushSubscription } from '../hooks/useNotifications'
 import { useTheme } from '../hooks/useTheme'
@@ -52,6 +52,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/correlation', labelKey: 'nav.correlation', icon: Grid3X3 },
       { to: '/backtest', labelKey: 'nav.backtest', icon: FlaskConical },
       { to: '/reports', labelKey: 'nav.reports', icon: FileBarChart },
+      { to: '/targets', labelKey: 'nav.targets', icon: Target },
     ],
   },
   {
@@ -85,6 +86,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/users', labelKey: 'nav.users', icon: Users, adminOnly: true },
       { to: '/audit', labelKey: 'nav.audit', icon: Shield, adminOnly: true },
       { to: '/permissions', labelKey: 'nav.permissions', icon: Lock, adminOnly: true },
+      { to: '/sessions', labelKey: 'nav.sessions', icon: Monitor, adminOnly: true },
     ],
   },
 ]

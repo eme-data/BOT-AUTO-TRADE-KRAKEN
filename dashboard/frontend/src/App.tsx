@@ -27,6 +27,8 @@ import ManualOrders from './pages/ManualOrders'
 import MarketJournal from './pages/MarketJournal'
 import Calendar from './pages/Calendar'
 import Permissions from './pages/Permissions'
+import Targets from './pages/Targets'
+import Sessions from './pages/Sessions'
 import Layout from './components/Layout'
 
 function decodeJwt(token: string): Record<string, unknown> | null {
@@ -134,6 +136,8 @@ export default function App() {
         <Route path="/orders" element={<ManualOrders token={token} />} />
         <Route path="/market-journal" element={<MarketJournal token={token} />} />
         <Route path="/calendar" element={<Calendar token={token} />} />
+        <Route path="/targets" element={<Targets token={token} />} />
+        <Route path="/sessions" element={<Sessions token={token} />} />
         {userInfo?.role === 'admin' && (
           <>
             <Route path="/users" element={<UsersPage token={token} />} />

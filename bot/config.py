@@ -66,6 +66,10 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "bot_default_stop_pct": {"label": "Default Stop (%)", "type": "number", "default": 3.0},
         "bot_default_limit_pct": {"label": "Default Limit (%)", "type": "number", "default": 6.0},
         "bot_paper_trading": {"label": "Paper Trading Mode", "type": "toggle", "default": True},
+        "risk_max_daily_loss_pct": {"label": "Max Daily Loss (%)", "type": "number", "default": 0.05, "min": 0.01, "max": 0.5},
+        "risk_stop_loss_pct": {"label": "Stop Loss (%)", "type": "number", "default": 0.03},
+        "risk_max_position_pct": {"label": "Max Position Size (%)", "type": "number", "default": 0.15},
+        "risk_max_open_trades": {"label": "Max Open Trades", "type": "number", "default": 4},
     },
     "autopilot": {
         "autopilot_enabled": {"label": "Enabled", "type": "toggle", "default": True},
@@ -99,6 +103,10 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
     "polymarket": {
         "polymarket_enabled": {"label": "Enable Polymarket Sentiment", "type": "toggle", "default": True},
         "polymarket_cache_ttl_minutes": {"label": "Cache TTL (minutes)", "type": "number", "default": 15},
+    },
+    "targets": {
+        "profit_target_daily": {"type": "number", "label": "Objectif quotidien ($)", "default": 10.0},
+        "profit_target_weekly": {"type": "number", "label": "Objectif hebdomadaire ($)", "default": 50.0},
     },
 }
 
@@ -152,6 +160,10 @@ class Settings(BaseSettings):
     bot_default_stop_pct: float = 3.0
     bot_default_limit_pct: float = 6.0
     bot_paper_trading: bool = True
+    risk_max_daily_loss_pct: float = 0.05
+    risk_stop_loss_pct: float = 0.03
+    risk_max_position_pct: float = 0.15
+    risk_max_open_trades: int = 4
 
     autopilot_enabled: bool = True
     autopilot_shadow_mode: bool = True
@@ -179,6 +191,10 @@ class Settings(BaseSettings):
     # ── Polymarket ─────────────────────────────────────
     polymarket_enabled: bool = True
     polymarket_cache_ttl_minutes: int = 15
+
+    # ── Profit Targets ──────────────────────────────────
+    profit_target_daily: float = 10.0
+    profit_target_weekly: float = 50.0
 
     # ── Derived ────────────────────────────────────────
     @property
@@ -257,6 +273,10 @@ class UserSettings:
         "bot_default_stop_pct": 3.0,
         "bot_default_limit_pct": 6.0,
         "bot_paper_trading": True,
+        "risk_max_daily_loss_pct": 0.05,
+        "risk_stop_loss_pct": 0.03,
+        "risk_max_position_pct": 0.15,
+        "risk_max_open_trades": 4,
         "autopilot_enabled": True,
         "autopilot_shadow_mode": True,
         "autopilot_scan_interval_minutes": 30,
@@ -277,6 +297,8 @@ class UserSettings:
         "ai_min_confidence": 0.5,
         "polymarket_enabled": True,
         "polymarket_cache_ttl_minutes": 15,
+        "profit_target_daily": 10.0,
+        "profit_target_weekly": 50.0,
     }
 
     def __init__(self, user_id: int) -> None:
