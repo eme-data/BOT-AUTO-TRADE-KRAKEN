@@ -405,10 +405,26 @@ class UserBotContext:
         if size <= 0:
             return
 
+        # Check exchange minimum order size
+        try:
+            market = self.broker.exchange.markets.get(signal.pair, {})
+            min_amount = market.get("limits", {}).get("amount", {}).get("min", 0) or 0
+            min_cost = market.get("limits", {}).get("cost", {}).get("min", 0) or 0
+            if size < min_amount:
+                await self.publish_log("INFO", "order_below_minimum",
+                                       pair=signal.pair, size=size, min_amount=min_amount)
+                return
+            if order_value < min_cost:
+                await self.publish_log("INFO", "order_below_min_cost",
+                                       pair=signal.pair, value=order_value, min_cost=min_cost)
+                return
+        except Exception:
+            pass
+
         logger.info("order_sizing", pair=signal.pair,
                      balance=round(balance.available_balance, 2),
                      order_value=round(order_value, 2),
-                     size=size, price=ticker.last)
+                     size=round(size, 8), price=ticker.last)
 
         order = OrderRequest(
             pair=signal.pair, direction=signal.direction, size=size,
