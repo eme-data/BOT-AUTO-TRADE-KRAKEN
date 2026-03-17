@@ -283,6 +283,10 @@ class KrakenRestClient(AbstractBroker):
                 current_price = ticker.last
             except Exception:
                 current_price = 0.0
+            # Skip dust positions (value < 1 in quote currency)
+            position_value = total * current_price if current_price > 0 else 0
+            if position_value < 1.0:
+                continue
             positions.append(
                 Position(
                     pair=pair,
