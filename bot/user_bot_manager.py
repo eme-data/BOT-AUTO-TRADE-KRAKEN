@@ -390,6 +390,9 @@ class UserBotContext:
                     signal.take_profit_pct = float(adj["take_profit_pct"])
 
         ticker = await self.broker.get_ticker(signal.pair)
+        logger.info("pre_order_debug", pair=signal.pair,
+                     balance=balance.available_balance, currency=balance.currency,
+                     price=ticker.last)
         size = self.risk_manager.calculate_position_size(signal, balance, ticker.last)
         if ai_result and ai_result.suggested_adjustments.get("size_factor") is not None:
             size *= float(ai_result.suggested_adjustments["size_factor"])
