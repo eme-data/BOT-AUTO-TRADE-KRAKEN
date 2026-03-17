@@ -11,7 +11,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Activity, DollarSign, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3 } from 'lucide-react'
+import { Activity, Euro, TrendingUp, AlertTriangle, Wallet, Terminal, BarChart3 } from 'lucide-react'
 
 interface DashboardProps {
   token: string
@@ -102,6 +102,7 @@ export default function Dashboard({ token }: DashboardProps) {
   const [krakenBalance, setKrakenBalance] = useState<{
     total_balance: number
     available_balance: number
+    currency?: string
     open_positions: number
     positions: { pair: string; direction: string; size: number; entry_price: number; unrealized_pnl: number }[]
   } | null>(null)
@@ -286,6 +287,10 @@ export default function Dashboard({ token }: DashboardProps) {
       [],
     )
 
+  // Currency symbol from Kraken balance response
+  const cur = krakenBalance?.currency === 'EUR' ? '€' : krakenBalance?.currency || '€'
+  const curCode = krakenBalance?.currency || 'EUR'
+
   if (loading) {
     return <p className="text-gray-400">Loading...</p>
   }
@@ -336,9 +341,9 @@ export default function Dashboard({ token }: DashboardProps) {
           color="blue"
         />
         <StatCard
-          icon={<DollarSign size={20} />}
+          icon={<Euro size={20} />}
           label="Total P&L"
-          value={`$${totalPnl.toFixed(2)}`}
+          value={`${totalPnl.toFixed(2)} ${cur}`}
           color={totalPnl >= 0 ? 'green' : 'red'}
         />
         <StatCard
@@ -371,11 +376,11 @@ export default function Dashboard({ token }: DashboardProps) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
               <div>
                 <p className="text-gray-500 text-xs mb-1">Solde total</p>
-                <p className="text-2xl font-bold font-mono">${krakenBalance.total_balance.toFixed(2)}</p>
+                <p className="text-2xl font-bold font-mono">{krakenBalance.total_balance.toFixed(2)} {cur}</p>
               </div>
               <div>
                 <p className="text-gray-500 text-xs mb-1">Disponible</p>
-                <p className="text-lg font-bold font-mono text-green-400">${krakenBalance.available_balance.toFixed(2)}</p>
+                <p className="text-lg font-bold font-mono text-green-400">{krakenBalance.available_balance.toFixed(2)} {cur}</p>
               </div>
               <div>
                 <p className="text-gray-500 text-xs mb-1">Positions ouvertes</p>
@@ -393,9 +398,9 @@ export default function Dashboard({ token }: DashboardProps) {
                         {p.direction.toUpperCase()}
                       </span>
                       <span className="text-gray-400">Size: {p.size}</span>
-                      <span className="text-gray-400">Entry: ${p.entry_price.toFixed(2)}</span>
+                      <span className="text-gray-400">Entry: {p.entry_price.toFixed(2)} {cur}</span>
                       <span className={p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} $
+                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} {cur}
                       </span>
                     </div>
                   ))}
@@ -421,7 +426,7 @@ export default function Dashboard({ token }: DashboardProps) {
           <div className="relative overflow-hidden">
             <div className="flex animate-marquee hover:[animation-play-state:paused] gap-0">
               {[...prices, ...prices].map((p, idx) => {
-                const symbol = p.pair.replace('/USD', '')
+                const symbol = p.pair.replace(/\/(USD|EUR|USDT)/, '')
                 return (
                   <div
                     key={`${p.pair}-${idx}`}
@@ -429,15 +434,15 @@ export default function Dashboard({ token }: DashboardProps) {
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-mono font-semibold text-sm">{symbol}</span>
-                      <span className="text-xs text-gray-600">USD</span>
+                      <span className="text-xs text-gray-600">{curCode}</span>
                     </div>
                     <p className="text-lg font-bold font-mono">
                       {p.last >= 1
-                        ? `$${p.last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                        : `$${p.last.toFixed(6)}`}
+                        ? `${p.last.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`
+                        : `${p.last.toFixed(6)} ${cur}`}
                     </p>
                     <div className="flex items-center justify-between mt-1 text-xs text-gray-500">
-                      <span>Spread: {p.spread < 0.01 ? p.spread.toFixed(6) : `$${p.spread.toFixed(2)}`}</span>
+                      <span>Spread: {p.spread < 0.01 ? p.spread.toFixed(6) : `${p.spread.toFixed(2)} ${cur}`}</span>
                       <span>Vol: {p.volume >= 1_000_000 ? `${(p.volume / 1_000_000).toFixed(1)}M` : p.volume >= 1000 ? `${(p.volume / 1000).toFixed(1)}K` : p.volume.toFixed(1)}</span>
                     </div>
                   </div>
@@ -633,7 +638,7 @@ export default function Dashboard({ token }: DashboardProps) {
                           t.profit >= 0 ? 'text-green-400' : 'text-red-400'
                         }
                       >
-                        ${t.profit.toFixed(2)}
+                        {t.profit.toFixed(2)} {cur}
                       </span>
                     ) : (
                       '–'
