@@ -151,7 +151,7 @@ async def bot_balance(user_id: int = Depends(get_user_id)):
     # LIVE mode: connect to real Kraken API with user's credentials
     from bot.broker.kraken_rest import KrakenRestClient
 
-    quote_currency = settings_map.get("exchange_quote_currency", "USD")
+    quote_currency = db_values.get("exchange_quote_currency", "USD")
     broker = KrakenRestClient(api_key=api_key, api_secret=api_secret, quote_currency=quote_currency)
 
     try:
