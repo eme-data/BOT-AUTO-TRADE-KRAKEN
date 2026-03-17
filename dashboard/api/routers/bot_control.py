@@ -170,6 +170,7 @@ async def bot_balance(user_id: int = Depends(get_user_id)):
                     "direction": p.direction.value if hasattr(p.direction, 'value') else str(p.direction),
                     "size": p.size,
                     "entry_price": p.entry_price,
+                    "current_price": p.current_price,
                     "unrealized_pnl": p.unrealized_pnl,
                 }
                 for p in positions
