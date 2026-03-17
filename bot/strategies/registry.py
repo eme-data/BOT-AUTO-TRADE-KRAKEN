@@ -11,6 +11,7 @@ from bot.broker.models import Tick
 from bot.strategies.base import AbstractStrategy, Signal
 from bot.strategies.macd_trend import MACDTrendStrategy
 from bot.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
+from bot.strategies.scalper import ScalperStrategy
 
 logger = structlog.get_logger(__name__)
 
@@ -18,6 +19,7 @@ logger = structlog.get_logger(__name__)
 STRATEGY_CLASSES: dict[str, type[AbstractStrategy]] = {
     "macd_trend": MACDTrendStrategy,
     "rsi_mean_reversion": RSIMeanReversionStrategy,
+    "scalper": ScalperStrategy,
 }
 
 
@@ -94,3 +96,4 @@ class StrategyRegistry:
         """Load default strategies with default config."""
         self.register("macd_trend", MACDTrendStrategy())
         self.register("rsi_mean_reversion", RSIMeanReversionStrategy())
+        self.register("scalper", ScalperStrategy())

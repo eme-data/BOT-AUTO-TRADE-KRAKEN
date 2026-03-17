@@ -674,7 +674,7 @@ class UserBotContext:
         from bot.data.indicators import add_all_indicators
 
         while self._running:
-            await asyncio.sleep(300)
+            await asyncio.sleep(120)  # 2 minutes for faster signal detection
             self._last_loop_run["bar_update"] = _time_mod.time()
             if not self.cfg.is_configured:
                 continue

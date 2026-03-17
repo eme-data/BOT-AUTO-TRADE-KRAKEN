@@ -16,6 +16,8 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     # ── Trend ──────────────────────────────────────────
+    df["ema_5"] = ta.ema(df["close"], length=5)
+    df["ema_13"] = ta.ema(df["close"], length=13)
     df["ema_20"] = ta.ema(df["close"], length=20)
     df["ema_50"] = ta.ema(df["close"], length=50)
     df["ema_200"] = ta.ema(df["close"], length=200)

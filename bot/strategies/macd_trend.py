@@ -12,11 +12,11 @@ from bot.strategies.base import AbstractStrategy, Signal, SignalType
 
 class MACDTrendStrategy(AbstractStrategy):
     name = "macd_trend"
-    min_bars = 100
+    min_bars = 30
 
     def __init__(
         self,
-        atr_stop_multiplier: float = 2.0,
+        atr_stop_multiplier: float = 1.5,
         risk_reward_ratio: float = 2.0,
     ) -> None:
         self.atr_stop_multiplier = atr_stop_multiplier
@@ -24,7 +24,6 @@ class MACDTrendStrategy(AbstractStrategy):
         self._last_histogram: float | None = None
 
     def on_tick(self, tick: Tick) -> Signal | None:
-        # MACD is a bar-based strategy; ticks are ignored
         return None
 
     def on_bar(self, pair: str, df: pd.DataFrame) -> Signal | None:
@@ -36,9 +35,11 @@ class MACDTrendStrategy(AbstractStrategy):
 
         cur = df.iloc[-1]
         prev = df.iloc[-2]
+        prev2 = df.iloc[-3] if len(df) >= 3 else prev
 
         macd_now = cur["macd_histogram"]
         macd_prev = prev["macd_histogram"]
+        macd_prev2 = prev2["macd_histogram"]
 
         if pd.isna(macd_now) or pd.isna(macd_prev):
             return None
@@ -51,48 +52,62 @@ class MACDTrendStrategy(AbstractStrategy):
 
         stop_pct = (atr * self.atr_stop_multiplier / close) * 100
         limit_pct = stop_pct * self.risk_reward_ratio
-
-        # Confidence: normalized histogram magnitude relative to ATR
         confidence = min(abs(macd_now) / atr, 1.0)
 
         signal: Signal | None = None
 
-        # Bullish crossover: histogram goes from negative to positive
+        # --- Signal 1: Classic crossover (histogram changes sign) ---
         if macd_prev < 0 and macd_now >= 0:
-            signal = Signal(
-                signal_type=SignalType.BUY,
-                pair=pair,
-                direction=Direction.BUY,
-                confidence=confidence,
-                strategy_name=self.name,
-                stop_loss_pct=stop_pct,
-                take_profit_pct=limit_pct,
-                metadata={
-                    "macd_histogram": macd_now,
-                    "atr": atr,
-                    "close": close,
-                },
-            )
-
-        # Bearish crossover: histogram goes from positive to negative
+            signal = self._make_signal(pair, SignalType.BUY, Direction.BUY,
+                                       confidence, stop_pct, limit_pct, macd_now, atr, close, "crossover")
         elif macd_prev > 0 and macd_now <= 0:
-            signal = Signal(
-                signal_type=SignalType.SELL,
-                pair=pair,
-                direction=Direction.SELL,
-                confidence=confidence,
-                strategy_name=self.name,
-                stop_loss_pct=stop_pct,
-                take_profit_pct=limit_pct,
-                metadata={
-                    "macd_histogram": macd_now,
-                    "atr": atr,
-                    "close": close,
-                },
-            )
+            signal = self._make_signal(pair, SignalType.SELL, Direction.SELL,
+                                       confidence, stop_pct, limit_pct, macd_now, atr, close, "crossover")
+
+        # --- Signal 2: Momentum acceleration (histogram expanding in same direction) ---
+        if signal is None and not pd.isna(macd_prev2):
+            # Bullish momentum: histogram negative but accelerating upward (3 bars)
+            if macd_now < 0 and macd_now > macd_prev > macd_prev2:
+                confidence_mom = min(abs(macd_now - macd_prev) / atr, 0.8)
+                if confidence_mom >= 0.2:
+                    signal = self._make_signal(pair, SignalType.BUY, Direction.BUY,
+                                               confidence_mom, stop_pct, limit_pct, macd_now, atr, close, "momentum")
+            # Bearish momentum: histogram positive but decelerating downward
+            elif macd_now > 0 and macd_now < macd_prev < macd_prev2:
+                confidence_mom = min(abs(macd_prev - macd_now) / atr, 0.8)
+                if confidence_mom >= 0.2:
+                    signal = self._make_signal(pair, SignalType.SELL, Direction.SELL,
+                                               confidence_mom, stop_pct, limit_pct, macd_now, atr, close, "momentum")
+
+        # --- Signal 3: Strong MACD divergence from signal line ---
+        if signal is None:
+            macd_line = cur["macd"]
+            macd_signal_line = cur["macd_signal"]
+            if not pd.isna(macd_line) and not pd.isna(macd_signal_line):
+                divergence = abs(macd_line - macd_signal_line) / atr
+                if divergence > 0.5:
+                    if macd_line > macd_signal_line and macd_now > 0:
+                        signal = self._make_signal(pair, SignalType.BUY, Direction.BUY,
+                                                   min(divergence, 1.0), stop_pct, limit_pct, macd_now, atr, close, "divergence")
+                    elif macd_line < macd_signal_line and macd_now < 0:
+                        signal = self._make_signal(pair, SignalType.SELL, Direction.SELL,
+                                                   min(divergence, 1.0), stop_pct, limit_pct, macd_now, atr, close, "divergence")
 
         self._last_histogram = macd_now
         return signal
+
+    def _make_signal(self, pair, signal_type, direction, confidence, stop_pct, limit_pct,
+                     macd_hist, atr, close, trigger):
+        return Signal(
+            signal_type=signal_type,
+            pair=pair,
+            direction=direction,
+            confidence=confidence,
+            strategy_name=self.name,
+            stop_loss_pct=stop_pct,
+            take_profit_pct=limit_pct,
+            metadata={"macd_histogram": macd_hist, "atr": atr, "close": close, "trigger": trigger},
+        )
 
     # ── Multi-timeframe confirmation ─────────────────
 
