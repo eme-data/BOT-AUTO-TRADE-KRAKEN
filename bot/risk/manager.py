@@ -156,6 +156,13 @@ class RiskManager:
         else:
             size = 0.0
 
+        # Cap position value to max_position_pct of available balance
+        max_position_pct = getattr(settings, "risk_max_position_pct", 0.15)
+        max_value = balance.available_balance * max_position_pct
+        if current_price > 0:
+            max_size_by_balance = max_value / current_price
+            size = min(size, max_size_by_balance)
+
         return min(size, self.max_position_size)
 
     def update_daily_pnl(self, pnl: float) -> None:
