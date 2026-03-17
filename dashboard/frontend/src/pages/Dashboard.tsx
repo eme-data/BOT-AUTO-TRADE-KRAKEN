@@ -104,7 +104,7 @@ export default function Dashboard({ token }: DashboardProps) {
     available_balance: number
     currency?: string
     open_positions: number
-    positions: { pair: string; direction: string; size: number; entry_price: number; unrealized_pnl: number }[]
+    positions: { pair: string; direction: string; size: number; entry_price: number; current_price: number; unrealized_pnl: number }[]
   } | null>(null)
   const [balanceError, setBalanceError] = useState<string | null>(null)
 
@@ -391,19 +391,22 @@ export default function Dashboard({ token }: DashboardProps) {
               <div className="border-t border-gray-800 pt-3">
                 <p className="text-xs text-gray-500 mb-2">Positions actives</p>
                 <div className="space-y-2">
-                  {krakenBalance.positions.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm bg-gray-800/50 rounded-lg px-3 py-2">
-                      <span className="font-mono">{p.pair}</span>
-                      <span className={p.direction === 'buy' ? 'text-green-400' : 'text-red-400'}>
-                        {p.direction.toUpperCase()}
-                      </span>
-                      <span className="text-gray-400">Size: {p.size}</span>
-                      <span className="text-gray-400">Entry: {p.entry_price.toFixed(2)} {cur}</span>
-                      <span className={p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} {cur}
-                      </span>
-                    </div>
-                  ))}
+                  {krakenBalance.positions.map((p, i) => {
+                    const value = p.size * (p.current_price || 0)
+                    return (
+                      <div key={i} className="flex items-center justify-between text-sm bg-gray-800/50 rounded-lg px-3 py-2">
+                        <span className="font-mono font-medium w-24">{p.pair}</span>
+                        <span className={`w-12 text-center ${p.direction === 'buy' ? 'text-green-400' : 'text-red-400'}`}>
+                          {p.direction.toUpperCase()}
+                        </span>
+                        <span className="text-gray-400 w-28 text-right">{p.size.toPrecision(4)}</span>
+                        <span className="text-white font-mono w-24 text-right">{value.toFixed(2)} {cur}</span>
+                        <span className={`w-24 text-right ${p.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} {cur}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
