@@ -372,11 +372,16 @@ export default function Dashboard({ token }: DashboardProps) {
           </div>
         </div>
         {krakenBalance ? (
-          <>
+          (() => {
+            const positionsValue = krakenBalance.positions.reduce(
+              (sum, p) => sum + p.size * (p.current_price || 0), 0
+            )
+            const totalWithPositions = krakenBalance.available_balance + positionsValue
+            return <>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
               <div>
                 <p className="text-gray-500 text-xs mb-1">Solde total</p>
-                <p className="text-2xl font-bold font-mono">{krakenBalance.total_balance.toFixed(2)} {cur}</p>
+                <p className="text-2xl font-bold font-mono">{totalWithPositions.toFixed(2)} {cur}</p>
               </div>
               <div>
                 <p className="text-gray-500 text-xs mb-1">Disponible</p>
@@ -411,6 +416,7 @@ export default function Dashboard({ token }: DashboardProps) {
               </div>
             )}
           </>
+          })()
         ) : (
           <p className="text-gray-500 text-sm">
             {balanceError || 'Chargement du solde...'}
