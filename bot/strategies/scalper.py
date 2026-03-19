@@ -18,8 +18,8 @@ class ScalperStrategy(AbstractStrategy):
         self,
         bb_squeeze_threshold: float = 0.02,
         volume_spike_mult: float = 1.5,
-        stop_pct: float = 1.0,
-        limit_pct: float = 1.5,
+        stop_pct: float = 4.0,
+        limit_pct: float = 5.0,
     ) -> None:
         self.bb_squeeze_threshold = bb_squeeze_threshold
         self.volume_spike_mult = volume_spike_mult
@@ -40,19 +40,27 @@ class ScalperStrategy(AbstractStrategy):
         if close == 0 or pd.isna(close):
             return None
 
+        # Major trend filter: don't buy below EMA200
+        ema200 = cur.get("ema_200")
+        in_uptrend = ema200 is None or pd.isna(ema200) or close > ema200
+
         signal: Signal | None = None
 
         # --- Signal 1: Bollinger Band breakout ---
-        signal = signal or self._bb_breakout(pair, df, cur, prev, close)
+        if in_uptrend:
+            signal = signal or self._bb_breakout(pair, df, cur, prev, close)
 
         # --- Signal 2: EMA fast cross (5/13) ---
-        signal = signal or self._ema_cross(pair, df, cur, prev, close)
+        if in_uptrend:
+            signal = signal or self._ema_cross(pair, df, cur, prev, close)
 
         # --- Signal 3: Volume spike + momentum ---
-        signal = signal or self._volume_momentum(pair, df, cur, prev, close)
+        if in_uptrend:
+            signal = signal or self._volume_momentum(pair, df, cur, prev, close)
 
         # --- Signal 4: Consecutive candles in same direction ---
-        signal = signal or self._candle_streak(pair, df, close)
+        if in_uptrend:
+            signal = signal or self._candle_streak(pair, df, close)
 
         return signal
 

@@ -18,8 +18,8 @@ class RSIMeanReversionStrategy(AbstractStrategy):
         self,
         rsi_oversold: float = 35.0,
         rsi_overbought: float = 65.0,
-        stop_pct: float = 1.5,
-        limit_pct: float = 3.0,
+        stop_pct: float = 4.0,
+        limit_pct: float = 5.0,
     ) -> None:
         self.rsi_oversold = rsi_oversold
         self.rsi_overbought = rsi_overbought

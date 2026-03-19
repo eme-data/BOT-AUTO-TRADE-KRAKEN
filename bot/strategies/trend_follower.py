@@ -16,8 +16,8 @@ class TrendFollowerStrategy(AbstractStrategy):
 
     def __init__(
         self,
-        stop_pct: float = 2.0,
-        limit_pct: float = 3.0,
+        stop_pct: float = 5.0,
+        limit_pct: float = 5.0,
     ) -> None:
         self.stop_pct = stop_pct
         self.limit_pct = limit_pct
@@ -38,6 +38,7 @@ class TrendFollowerStrategy(AbstractStrategy):
 
         ema20 = cur.get("ema_20")
         prev_ema20 = prev.get("ema_20")
+        ema200 = cur.get("ema_200")
         rsi = cur.get("rsi_14") or cur.get("rsi")
 
         if any(v is None or pd.isna(v) for v in [ema20, prev_ema20]):
@@ -47,12 +48,15 @@ class TrendFollowerStrategy(AbstractStrategy):
         price_above_ema = close > ema20
         price_below_ema = close < ema20
 
+        # Major trend filter: don't buy below EMA200 (bearish territory)
+        in_uptrend = ema200 is None or pd.isna(ema200) or close > ema200
+
         # Avoid overbought/oversold extremes
         rsi_ok_buy = rsi is None or pd.isna(rsi) or rsi < 72
         rsi_ok_sell = rsi is None or pd.isna(rsi) or rsi > 28
 
-        # BUY: price above rising EMA20 + not overbought
-        if price_above_ema and ema_rising and rsi_ok_buy:
+        # BUY: price above rising EMA20 + above EMA200 + not overbought
+        if price_above_ema and ema_rising and rsi_ok_buy and in_uptrend:
             # Check that price just crossed above or is near EMA (within 1%)
             dist_pct = (close - ema20) / ema20
             if dist_pct < 0.015:  # Within 1.5% of EMA — fresh signal

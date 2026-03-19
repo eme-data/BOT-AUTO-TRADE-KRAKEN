@@ -449,6 +449,22 @@ class UserBotContext:
 
         ticker = await self.broker.get_ticker(signal.pair)
 
+        # Sentiment gate: block BUY if Polymarket sentiment is bearish
+        if signal.direction == Direction.BUY and self.polymarket_client:
+            try:
+                sentiment = await self.polymarket_client.get_sentiment_for_pair(signal.pair)
+                macro = await self.polymarket_client.get_macro_sentiment()
+                pair_score = sentiment.bullish_probability if sentiment else 0.5
+                macro_score = macro.overall_score if macro else 0.5
+                # Block if both pair AND macro sentiment are bearish
+                if pair_score < 0.4 and macro_score < 0.4:
+                    logger.info("signal_blocked_bearish_sentiment", user_id=self.user_id,
+                                pair=signal.pair, pair_sentiment=round(pair_score, 2),
+                                macro_sentiment=round(macro_score, 2))
+                    return
+            except Exception:
+                pass  # Don't block on Polymarket errors
+
         # Simple position sizing: fixed % of available balance in quote currency
         max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
         order_value = balance.available_balance * max_pct
