@@ -481,9 +481,14 @@ class UserBotContext:
         try:
             result = await self.broker.open_position(order)
         except Exception as exc:
+            logger.error("order_error", user_id=self.user_id, pair=signal.pair,
+                         error=str(exc), error_type=type(exc).__name__)
             await self.publish_log("ERROR", "order_error", pair=signal.pair, error=str(exc))
             await notify_error(f"Order failed: {exc}")
             return
+
+        logger.info("order_success", user_id=self.user_id, pair=signal.pair,
+                     order_id=result.order_id, price=result.price, fee=result.fee)
 
         latency = _time.monotonic() - t0
         order_latency_histogram.observe(latency)
