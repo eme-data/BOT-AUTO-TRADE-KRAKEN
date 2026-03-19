@@ -491,25 +491,49 @@ class UserBotContext:
             strategy=signal.strategy_name, direction=signal.direction.value, pair=signal.pair
         ).inc()
 
+        # Fetch real fill price if broker returned 0 (Kraken market orders)
+        fill_price = result.price
+        if fill_price == 0 or fill_price is None:
+            try:
+                import asyncio as _aio
+                await _aio.sleep(1)  # Wait for fill
+                filled = await self.broker.exchange.fetch_order(result.order_id, signal.pair)
+                fill_price = float(filled.get("average") or filled.get("price") or 0)
+                result_fee = float(filled.get("fee", {}).get("cost", 0))
+                if result_fee > 0:
+                    result = result._replace(fee=result_fee) if hasattr(result, '_replace') else result
+                logger.info("fill_price_fetched", user_id=self.user_id, pair=signal.pair,
+                            fill_price=fill_price, order_id=result.order_id)
+            except Exception as exc:
+                logger.warning("fill_price_fetch_error", user_id=self.user_id, error=str(exc))
+                # Fallback: use ticker price
+                fill_price = ticker.last
+
         trade_status = "PAPER" if self.cfg.bot_paper_trading else None
-        async with get_session() as session:
-            repo = TradeRepository(session, user_id=self.user_id)
-            await repo.create_trade(
-                order_id=result.order_id, pair=signal.pair,
-                direction=signal.direction.value, size=size,
-                entry_price=result.price,
-                stop_loss=(result.price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
-                take_profit=(result.price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
-                fee=result.fee, strategy=signal.strategy_name,
-                metadata_=signal.metadata,
-                **({"status": trade_status} if trade_status else {}),
-            )
-            sig_repo = SignalRepository(session, user_id=self.user_id)
-            await sig_repo.log_signal(
-                pair=signal.pair, strategy=signal.strategy_name,
-                signal_type=signal.signal_type.value, confidence=signal.confidence,
-                indicators=signal.metadata, executed=True, order_id=result.order_id,
-            )
+        try:
+            async with get_session() as session:
+                repo = TradeRepository(session, user_id=self.user_id)
+                await repo.create_trade(
+                    order_id=result.order_id, pair=signal.pair,
+                    direction=signal.direction.value, size=size,
+                    entry_price=fill_price,
+                    stop_loss=(fill_price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
+                    take_profit=(fill_price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
+                    fee=result.fee, strategy=signal.strategy_name,
+                    metadata_=signal.metadata,
+                    **({"status": trade_status} if trade_status else {}),
+                )
+                sig_repo = SignalRepository(session, user_id=self.user_id)
+                await sig_repo.log_signal(
+                    pair=signal.pair, strategy=signal.strategy_name,
+                    signal_type=signal.signal_type.value, confidence=signal.confidence,
+                    indicators=signal.metadata, executed=True, order_id=result.order_id,
+                )
+            logger.info("trade_saved_to_db", user_id=self.user_id, pair=signal.pair,
+                        order_id=result.order_id, entry_price=fill_price, size=size)
+        except Exception as exc:
+            logger.error("trade_db_save_error", user_id=self.user_id, pair=signal.pair,
+                         error=str(exc), error_type=type(exc).__name__)
 
         if signal.stop_loss_pct:
             self.trailing_stop_mgr.register(
