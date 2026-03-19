@@ -153,7 +153,7 @@ class CCXTBroker(AbstractBroker):
             size=order.size,
             price=float(result.get("average") or result.get("price") or 0),
             status=OrderStatus.OPEN,
-            fee=float(result.get("fee", {}).get("cost", 0)),
+            fee=float((result.get("fee") or {}).get("cost", 0)),
             raw=result,
         )
 
@@ -168,7 +168,7 @@ class CCXTBroker(AbstractBroker):
             size=size,
             price=float(result.get("average") or result.get("price") or 0),
             status=OrderStatus.CLOSED,
-            fee=float(result.get("fee", {}).get("cost", 0)),
+            fee=float((result.get("fee") or {}).get("cost", 0)),
             raw=result,
         )
 

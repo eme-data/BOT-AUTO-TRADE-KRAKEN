@@ -217,7 +217,7 @@ class KrakenRestClient(AbstractBroker):
 
         order_id = result["id"]
         fill_price = float(result.get("average") or result.get("price") or 0)
-        fee = float(result.get("fee", {}).get("cost", 0))
+        fee = float((result.get("fee") or {}).get("cost", 0))
 
         logger.info(
             "order_opened",
@@ -261,7 +261,7 @@ class KrakenRestClient(AbstractBroker):
             size=size,
             price=float(result.get("average") or result.get("price") or 0),
             status=OrderStatus.CLOSED,
-            fee=float(result.get("fee", {}).get("cost", 0)),
+            fee=float((result.get("fee") or {}).get("cost", 0)),
             raw=result,
         )
 
