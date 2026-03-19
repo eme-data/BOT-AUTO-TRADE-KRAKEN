@@ -39,6 +39,21 @@ async def _load_user_settings(user_id: int) -> UserSettings:
     return us
 
 
+def _sanitize_metadata(meta: dict | None) -> dict | None:
+    """Convert numpy/bool types to JSON-safe Python types."""
+    if not meta:
+        return meta
+    clean = {}
+    for k, v in meta.items():
+        if hasattr(v, 'item'):  # numpy scalar
+            clean[k] = v.item()
+        elif isinstance(v, (int, float, str, bool, type(None))):
+            clean[k] = v
+        else:
+            clean[k] = str(v)
+    return clean
+
+
 class UserBotContext:
     """All trading components scoped to a single user."""
 
@@ -525,7 +540,7 @@ class UserBotContext:
                     stop_loss=(fill_price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
                     take_profit=(fill_price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
                     fee=result.fee, strategy=signal.strategy_name,
-                    metadata_=signal.metadata,
+                    metadata_=_sanitize_metadata(signal.metadata),
                     **({"status": trade_status} if trade_status else {}),
                 )
                 sig_repo = SignalRepository(session, user_id=self.user_id)
