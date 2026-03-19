@@ -349,6 +349,27 @@ class UserBotContext:
         from bot.notifications import notify_error, notify_trade_opened
         from bot.risk.trailing_stop import TrailingStopState
 
+        logger.info("process_signal_start", user_id=self.user_id,
+                     pair=signal.pair, direction=signal.direction.value,
+                     strategy=signal.strategy_name)
+        try:
+            await self._process_signal_inner(signal)
+        except Exception as exc:
+            logger.error("process_signal_error", user_id=self.user_id,
+                         pair=signal.pair, error=str(exc), error_type=type(exc).__name__)
+
+    async def _process_signal_inner(self, signal) -> None:
+        import time as _time
+        from bot.broker.models import OrderRequest
+        from bot.ai.models import AIVerdict
+        from bot.db.repository import TradeRepository, SignalRepository
+        from bot.metrics import (
+            orders_placed_counter, orders_rejected_counter,
+            signals_generated_counter, order_latency_histogram,
+        )
+        from bot.notifications import notify_error, notify_trade_opened
+        from bot.risk.trailing_stop import TrailingStopState
+
         # Drawdown protection check
         if self._check_drawdown_protection():
             await self.publish_log("INFO", "signal_skipped_paused", pair=signal.pair, reason=self._pause_reason)
