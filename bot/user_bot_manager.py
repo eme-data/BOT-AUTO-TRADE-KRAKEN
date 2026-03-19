@@ -789,6 +789,105 @@ class UserBotContext:
 
     # ── Background loops ───────────────────────────────
 
+    async def _check_stops_polling(self) -> None:
+        """Fallback stop-loss/take-profit check via REST polling.
+
+        Runs every cycle in case WebSocket ticks are not arriving.
+        """
+        from bot.db.repository import TradeRepository
+        from bot.broker.models import Direction
+
+        try:
+            async with get_session() as session:
+                repo = TradeRepository(session, user_id=self.user_id)
+                open_trades = await repo.get_open_trades()
+
+            if not open_trades:
+                return
+
+            for trade in open_trades:
+                try:
+                    ticker = await self.broker.get_ticker(trade.pair)
+                    price = ticker.last
+                    if price <= 0:
+                        continue
+
+                    should_close = False
+                    reason = ""
+
+                    # Stop-loss check
+                    if trade.stop_loss and price <= trade.stop_loss:
+                        should_close = True
+                        reason = f"stop_loss ({price:.4f} <= {trade.stop_loss:.4f})"
+
+                    # Take-profit check
+                    if trade.take_profit and price >= trade.take_profit:
+                        should_close = True
+                        reason = f"take_profit ({price:.4f} >= {trade.take_profit:.4f})"
+
+                    if should_close:
+                        logger.info("polling_stop_triggered", user_id=self.user_id,
+                                    pair=trade.pair, reason=reason, price=price)
+                        try:
+                            result = await self.broker.close_position(
+                                order_id=trade.order_id, pair=trade.pair, size=trade.size
+                            )
+                            profit = (price - trade.entry_price) * trade.size
+                            fee = float((result.fee if result.fee else 0))
+                            self._daily_pnl += profit
+
+                            async with get_session() as session:
+                                repo = TradeRepository(session, user_id=self.user_id)
+                                await repo.close_trade(
+                                    order_id=trade.order_id,
+                                    exit_price=price,
+                                    profit=profit,
+                                    fee=fee,
+                                )
+
+                            # Unregister from trailing stop if registered
+                            self.trailing_stop_mgr.unregister(trade.order_id)
+
+                            logger.info("trade_closed_by_polling", user_id=self.user_id,
+                                        pair=trade.pair, profit=round(profit, 4),
+                                        exit_price=price, reason=reason)
+                            await self.publish_log("INFO", "trade_closed",
+                                                   pair=trade.pair, profit=round(profit, 4))
+
+                            # Push notification
+                            try:
+                                from bot.notifications_push import notify_trade_push
+                                asyncio.ensure_future(notify_trade_push(
+                                    user_id=self.user_id, trade_type="trade_closed",
+                                    pair=trade.pair, direction=trade.direction,
+                                    price=price, profit=profit,
+                                ))
+                            except Exception:
+                                pass
+                        except Exception as exc:
+                            logger.error("polling_close_error", user_id=self.user_id,
+                                         pair=trade.pair, error=str(exc))
+                    else:
+                        # Update trailing stop: if price moved up, tighten stop-loss
+                        if trade.stop_loss and trade.direction == "buy":
+                            trail_pct = float(getattr(self.cfg, "risk_stop_loss_pct", 0.03))
+                            new_stop = price * (1 - trail_pct)
+                            if new_stop > trade.stop_loss:
+                                async with get_session() as session:
+                                    from sqlalchemy import update as sql_update
+                                    from bot.db.models import Trade
+                                    await session.execute(
+                                        sql_update(Trade)
+                                        .where(Trade.order_id == trade.order_id)
+                                        .values(stop_loss=new_stop)
+                                    )
+                                    await session.commit()
+                except Exception as exc:
+                    logger.warning("stop_check_error", user_id=self.user_id,
+                                   pair=trade.pair, error=str(exc))
+        except Exception as exc:
+            logger.warning("polling_stops_error", user_id=self.user_id, error=str(exc))
+
     async def _bar_update_loop(self) -> None:
         import pandas as pd
         from bot.data.indicators import add_all_indicators
@@ -798,6 +897,9 @@ class UserBotContext:
             self._last_loop_run["bar_update"] = _time_mod.time()
             if not self.cfg.is_configured:
                 continue
+
+            # Check stops via polling (fallback for unreliable WebSocket)
+            await self._check_stops_polling()
             # Merge default pairs + autopilot-activated pairs
             all_pairs = set(self._active_pairs)
             if self.autopilot and self.autopilot.active_scores:
