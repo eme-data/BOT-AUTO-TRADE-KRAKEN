@@ -172,6 +172,10 @@ class UserBotContext:
         return f"bot:user:{self.user_id}:{key}"
 
     async def publish_log(self, level: str, event: str, **kwargs: Any) -> None:
+        # Also log to stdout for docker logs visibility
+        log_fn = logger.info if level in ("INFO", "DEBUG") else logger.warning if level == "WARNING" else logger.error
+        log_fn(event, user_id=self.user_id, **kwargs)
+
         entry = {
             "timestamp": __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
