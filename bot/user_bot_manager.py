@@ -763,6 +763,9 @@ class UserBotContext:
                     else:
                         signals = self.strategy_registry.dispatch_bar(pair, df)
                     for signal in signals:
+                        logger.info("signal_generated", user_id=self.user_id, pair=pair,
+                                    direction=signal.direction.value, strategy=signal.strategy_name,
+                                    trigger=signal.metadata.get("trigger", ""))
                         await self._process_signal(signal)
                 except Exception as exc:
                     logger.error("bar_update_error", user_id=self.user_id, pair=pair, error=str(exc))
