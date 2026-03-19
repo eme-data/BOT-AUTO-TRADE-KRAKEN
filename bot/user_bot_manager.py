@@ -391,6 +391,9 @@ class UserBotContext:
             ai_result = await self._run_ai_validation(signal, positions, balance)
             if ai_result and ai_result.verdict == AIVerdict.REJECT:
                 orders_rejected_counter.labels(reason="ai_rejected").inc()
+                await self.publish_log("INFO", "signal_rejected_by_ai",
+                                       pair=signal.pair, strategy=signal.strategy_name,
+                                       reason=ai_result.raw_response[:200] if ai_result.raw_response else "no details")
                 return
             if ai_result and ai_result.verdict == AIVerdict.ADJUST:
                 adj = ai_result.suggested_adjustments
@@ -405,6 +408,8 @@ class UserBotContext:
         max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
         order_value = balance.available_balance * max_pct
         if ticker.last <= 0 or order_value < 1.0:
+            logger.info("order_skipped_low_value", user_id=self.user_id, pair=signal.pair,
+                        order_value=round(order_value, 2), ticker_last=ticker.last)
             return
         size = order_value / ticker.last
 
