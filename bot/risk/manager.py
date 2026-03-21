@@ -41,13 +41,14 @@ class RiskState:
 class RiskManager:
     """Validates trade signals against risk rules."""
 
-    def __init__(self, thirty_day_volume: float = 0.0) -> None:
+    def __init__(self, thirty_day_volume: float = 0.0, cfg=None) -> None:
         self.state = RiskState()
-        self.max_daily_loss = settings.bot_max_daily_loss
-        self.max_position_size = settings.bot_max_position_size
-        self.max_open_positions = settings.bot_max_open_positions
-        self.max_per_pair = settings.bot_max_per_pair
-        self.risk_per_trade_pct = settings.bot_risk_per_trade_pct
+        _cfg = cfg or settings
+        self.max_daily_loss = getattr(_cfg, 'bot_max_daily_loss', settings.bot_max_daily_loss)
+        self.max_position_size = getattr(_cfg, 'bot_max_position_size', settings.bot_max_position_size)
+        self.max_open_positions = int(getattr(_cfg, 'risk_max_open_trades', settings.bot_max_open_positions))
+        self.max_per_pair = int(getattr(_cfg, 'bot_max_per_pair', settings.bot_max_per_pair))
+        self.risk_per_trade_pct = getattr(_cfg, 'bot_risk_per_trade_pct', settings.bot_risk_per_trade_pct)
         self.fee_calculator = KrakenFeeCalculator(
             thirty_day_volume=thirty_day_volume,
         )

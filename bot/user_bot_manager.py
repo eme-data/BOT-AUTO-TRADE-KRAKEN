@@ -121,12 +121,8 @@ class UserBotContext:
         self.ws_client = KrakenWSClient()
         self.data_mgr = HistoricalDataManager(self.broker)
         self.strategy_registry = StrategyRegistry()
-        self.risk_manager = RiskManager()
-        # Override risk manager with per-user settings
-        self.risk_manager.max_open_positions = int(getattr(self.cfg, "risk_max_open_trades", 4))
-        self.risk_manager.max_position_size = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
-        stop_loss = getattr(self.cfg, "risk_stop_loss_pct", 0.03)
-        self.risk_manager.risk_per_trade_pct = float(stop_loss) * 100 if float(stop_loss) < 1 else float(stop_loss)
+        self.risk_manager = RiskManager(cfg=self.cfg)
+        self.risk_manager.max_per_pair = 2  # Allow 2 positions per pair
         self.trailing_stop_mgr = TrailingStopManager()
 
         # Polymarket sentiment (optional)

@@ -40,27 +40,33 @@ class ScalperStrategy(AbstractStrategy):
         if close == 0 or pd.isna(close):
             return None
 
-        # Major trend filter: don't buy below EMA200
+        # Trend context
         ema200 = cur.get("ema_200")
         in_uptrend = ema200 is None or pd.isna(ema200) or close > ema200
+        rsi = cur.get("rsi_14") or cur.get("rsi")
+        is_oversold = rsi is not None and not pd.isna(rsi) and rsi < 30
 
         signal: Signal | None = None
 
-        # --- Signal 1: Bollinger Band breakout ---
-        if in_uptrend:
+        # --- Signal 1: Bollinger Band bounce (works in any trend for oversold) ---
+        if in_uptrend or is_oversold:
             signal = signal or self._bb_breakout(pair, df, cur, prev, close)
 
-        # --- Signal 2: EMA fast cross (5/13) ---
+        # --- Signal 2: EMA fast cross (5/13) — only in uptrend ---
         if in_uptrend:
             signal = signal or self._ema_cross(pair, df, cur, prev, close)
 
         # --- Signal 3: Volume spike + momentum ---
-        if in_uptrend:
+        if in_uptrend or is_oversold:
             signal = signal or self._volume_momentum(pair, df, cur, prev, close)
 
         # --- Signal 4: Consecutive candles in same direction ---
         if in_uptrend:
             signal = signal or self._candle_streak(pair, df, close)
+
+        # --- Signal 5: RSI extreme oversold bounce (any trend) ---
+        if is_oversold and signal is None:
+            signal = self._rsi_bounce(pair, df, cur, prev, close, rsi)
 
         return signal
 
@@ -198,6 +204,22 @@ class ScalperStrategy(AbstractStrategy):
                 stop_loss_pct=self.stop_pct, take_profit_pct=self.limit_pct,
                 metadata={"trigger": "candle_streak_bear", "streak_pct": streak_pct, "close": close},
             )
+
+    def _rsi_bounce(self, pair, df, cur, prev, close, rsi) -> Signal | None:
+        """Buy on RSI extreme oversold bounce — works in any market regime."""
+        prev_rsi = prev.get("rsi_14") or prev.get("rsi")
+        if prev_rsi is None or pd.isna(prev_rsi):
+            return None
+        # RSI was below 30 and is now bouncing up
+        if rsi > prev_rsi and rsi < 35:
+            return Signal(
+                signal_type=SignalType.BUY, pair=pair, direction=Direction.BUY,
+                confidence=min(0.5 + (30 - rsi) * 0.05, 0.85),
+                strategy_name=self.name,
+                stop_loss_pct=self.stop_pct, take_profit_pct=self.limit_pct,
+                metadata={"trigger": "rsi_oversold_bounce", "rsi": rsi, "close": close},
+            )
+        return None
 
     def on_bar_mtf(self, pair, df_primary, df_higher) -> Signal | None:
         # Scalper doesn't use higher timeframe — speed is key
