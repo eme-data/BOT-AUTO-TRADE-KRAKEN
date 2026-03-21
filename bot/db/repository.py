@@ -70,6 +70,11 @@ class TradeRepository:
         result = await self.session.execute(self._user_filter(stmt))
         return list(result.scalars().all())
 
+    async def get_open_by_pair(self, pair: str) -> list[Trade]:
+        stmt = select(Trade).where(Trade.status == "OPEN", Trade.pair == pair).order_by(Trade.opened_at)
+        result = await self.session.execute(self._user_filter(stmt))
+        return list(result.scalars().all())
+
     async def get_recent_trades(self, limit: int = 50) -> list[Trade]:
         stmt = select(Trade).order_by(Trade.opened_at.desc()).limit(limit)
         result = await self.session.execute(self._user_filter(stmt))

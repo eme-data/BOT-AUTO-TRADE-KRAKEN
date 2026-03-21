@@ -404,21 +404,25 @@ class UserBotContext:
         if signal.signal_type == SignalType.HOLD:
             return
 
-        # Spot exchange: can only SELL assets we own
+        # Spot exchange: SELL signal = close existing BUY position
         if signal.direction == Direction.SELL:
             owned = await self.broker.get_open_positions()
-            has_asset = any(p.pair == signal.pair and p.size > 0 for p in owned)
-            if not has_asset:
+            matching = [p for p in owned if p.pair == signal.pair and p.size > 0]
+            if not matching:
                 await self.publish_log("INFO", "sell_skipped_no_position",
                                        pair=signal.pair, strategy=signal.strategy_name)
                 return
+            # Close the position instead of opening a SHORT
+            for pos in matching:
+                await self._close_position_by_signal(signal, pos)
+            return
 
         positions = await self.broker.get_open_positions()
         balance = await self.broker.get_account_balance()
         check = self.risk_manager.check_signal(signal, positions, balance)
         if not check.allowed:
             orders_rejected_counter.labels(reason=check.reason).inc()
-            await self.publish_log("INFO", "signal_rejected", pair=signal.pair, reason=check.reason)
+            logger.info("signal_rejected", user_id=self.user_id, pair=signal.pair, reason=check.reason)
             return
 
         is_autopilot = signal.strategy_name.startswith("ap_")
@@ -609,6 +613,52 @@ class UserBotContext:
             direction=signal.direction.value, size=size,
             price=result.price, strategy=signal.strategy_name,
         )
+
+    async def _close_position_by_signal(self, signal, position) -> None:
+        """Close an existing position when a strategy generates an opposite signal."""
+        from bot.db.repository import TradeRepository
+
+        logger.info("closing_position_by_signal", user_id=self.user_id,
+                     pair=signal.pair, strategy=signal.strategy_name,
+                     size=position.size, current_price=position.current_price)
+        try:
+            result = await self.broker._exchange.create_order(
+                symbol=signal.pair, type='market', side='sell', amount=position.size,
+            )
+            order_id = result.get("id", "")
+
+            # Fetch fill price
+            import asyncio as _aio
+            await _aio.sleep(1)
+            try:
+                filled = await self.broker._exchange.fetch_order(order_id, signal.pair)
+                exit_price = float(filled.get("average") or filled.get("price") or position.current_price)
+            except Exception:
+                exit_price = position.current_price
+
+            # Find trade in DB and close it
+            async with get_session() as session:
+                repo = TradeRepository(session, user_id=self.user_id)
+                trades = await repo.get_open_by_pair(signal.pair)
+                for trade in trades:
+                    profit = (exit_price - trade.entry_price) * trade.size
+                    await repo.close_trade(order_id=trade.order_id, exit_price=exit_price,
+                                           profit=profit, fee=0)
+                    self._daily_pnl += profit
+                    logger.info("trade_closed_by_signal", user_id=self.user_id,
+                                pair=signal.pair, profit=round(profit, 4),
+                                strategy=signal.strategy_name)
+                    await self.publish_log("INFO", "trade_closed", pair=signal.pair, profit=profit)
+
+            # Unregister trailing stops for this pair
+            for oid in list(self.trailing_stop_mgr._stops.keys()):
+                s = self.trailing_stop_mgr._stops.get(oid)
+                if s and s.pair == signal.pair:
+                    self.trailing_stop_mgr.unregister(oid)
+
+        except Exception as exc:
+            logger.error("close_by_signal_error", user_id=self.user_id,
+                         pair=signal.pair, error=str(exc))
 
     async def _close_on_trailing_stop(self, order_id: str, tick) -> None:
         from bot.broker.models import Direction
