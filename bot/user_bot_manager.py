@@ -238,7 +238,7 @@ class UserBotContext:
             polymarket_client=self.polymarket_client,
             quote_currency=getattr(self.cfg, "exchange_quote_currency", "USD"),
         )
-        self.autopilot.enabled = self.cfg.autopilot_enabled
+        self.autopilot.apply_user_config(self.cfg)
 
         self.ws_client.set_tick_callback(self._on_tick)
 

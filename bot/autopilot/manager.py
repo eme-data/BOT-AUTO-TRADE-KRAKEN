@@ -46,6 +46,13 @@ class AutopilotManager:
         self.shadow_mode = settings.autopilot_shadow_mode
         self.max_active = settings.autopilot_max_active
         self.min_score = settings.autopilot_min_score
+        self._cfg = None  # Set by UserBotContext to override with per-user values
+
+    def apply_user_config(self, cfg) -> None:
+        """Override autopilot settings with per-user config."""
+        self._cfg = cfg
+        self.enabled = bool(getattr(cfg, 'autopilot_enabled', self.enabled))
+        self.min_score = float(getattr(cfg, 'autopilot_min_score', self.min_score))
 
     async def run_scan_cycle(self) -> list[MarketScore]:
         """Full autopilot cycle: scan → score → activate top N."""
