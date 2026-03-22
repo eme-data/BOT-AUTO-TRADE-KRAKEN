@@ -96,6 +96,7 @@ class UserBotContext:
             "sync_positions": 0.0,
         }
         self._last_tick_at: float = 0.0
+        self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -407,6 +408,15 @@ class UserBotContext:
         if signal.signal_type == SignalType.HOLD:
             return
 
+        # Cooldown: don't reopen a pair within 60 minutes of last close
+        cooldown_key = f"cooldown:{signal.pair}"
+        if signal.direction == Direction.BUY and cooldown_key in self._cooldowns:
+            elapsed = _time_mod.time() - self._cooldowns[cooldown_key]
+            if elapsed < 3600:  # 1 hour cooldown
+                logger.info("signal_cooldown", user_id=self.user_id,
+                            pair=signal.pair, remaining_min=round((3600 - elapsed) / 60))
+                return
+
         # Spot exchange: SELL signal = close existing BUY position
         if signal.direction == Direction.SELL:
             owned = await self.broker.get_open_positions()
@@ -422,6 +432,14 @@ class UserBotContext:
 
         positions = await self.broker.get_open_positions()
         balance = await self.broker.get_account_balance()
+
+        # Hard check: don't open if we already have this pair on Kraken
+        existing_pairs = {p.pair for p in positions if p.size * p.current_price >= 1.0}
+        if signal.pair in existing_pairs:
+            logger.info("signal_rejected", user_id=self.user_id, pair=signal.pair,
+                        reason=f"Already holding {signal.pair}")
+            return
+
         check = self.risk_manager.check_signal(signal, positions, balance)
         if not check.allowed:
             orders_rejected_counter.labels(reason=check.reason).inc()
@@ -648,6 +666,7 @@ class UserBotContext:
                     await repo.close_trade(order_id=trade.order_id, exit_price=exit_price,
                                            profit=profit, fee=0)
                     self._daily_pnl += profit
+                    self._cooldowns[f"cooldown:{signal.pair}"] = _time_mod.time()
                     logger.info("trade_closed_by_signal", user_id=self.user_id,
                                 pair=signal.pair, profit=round(profit, 4),
                                 strategy=signal.strategy_name)
@@ -679,6 +698,7 @@ class UserBotContext:
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
                 await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
+            self._cooldowns[f"cooldown:{stop.pair}"] = _time_mod.time()
             await self.publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
 
             # Publish trade_closed event to Redis
@@ -913,6 +933,7 @@ class UserBotContext:
                             # Unregister from trailing stop if registered
                             self.trailing_stop_mgr.unregister(trade.order_id)
 
+                            self._cooldowns[f"cooldown:{trade.pair}"] = _time_mod.time()
                             logger.info("trade_closed_by_polling", user_id=self.user_id,
                                         pair=trade.pair, profit=round(profit, 4),
                                         exit_price=price, reason=reason)
