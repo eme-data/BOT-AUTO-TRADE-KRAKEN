@@ -438,7 +438,12 @@ class PolymarketClient:
             return cached  # type: ignore[return-value]
 
         markets = await self.fetch_crypto_markets()
-        relevant = [m for m in markets if m.related_pair == pair]
+        # Match by base asset (e.g. BTC/EUR matches BTC/USD markets)
+        pair_base = pair.split("/")[0] if "/" in pair else pair
+        relevant = [
+            m for m in markets
+            if m.related_pair and m.related_pair.split("/")[0] == pair_base
+        ]
 
         if not relevant:
             return None

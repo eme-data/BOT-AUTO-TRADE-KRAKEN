@@ -19,7 +19,7 @@ from bot.db.session import get_session, init_db, close_db
 
 logger = structlog.get_logger(__name__)
 
-HEALTH_STALE_SECONDS = 300  # 5 minutes – loop considered dead after this
+HEALTH_STALE_SECONDS = 600  # 10 minutes – loop considered dead after this
 HEALTH_CHECK_INTERVAL = 60  # seconds between health monitor ticks
 
 
@@ -97,6 +97,15 @@ class UserBotContext:
         }
         self._last_tick_at: float = 0.0
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
+
+    async def _set_cooldown(self, pair: str) -> None:
+        """Set a 1-hour cooldown on a pair, persisted in Redis."""
+        self._cooldowns[f"cooldown:{pair}"] = _time_mod.time()
+        if self._redis:
+            try:
+                await self._redis.setex(self._rkey(f"cooldown:{pair}"), 3600, "1")
+            except Exception:
+                pass
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -409,12 +418,27 @@ class UserBotContext:
             return
 
         # Cooldown: don't reopen a pair within 60 minutes of last close
+        # Check both in-memory and Redis (survives restarts)
         cooldown_key = f"cooldown:{signal.pair}"
-        if signal.direction == Direction.BUY and cooldown_key in self._cooldowns:
-            elapsed = _time_mod.time() - self._cooldowns[cooldown_key]
-            if elapsed < 3600:  # 1 hour cooldown
+        if signal.direction == Direction.BUY:
+            in_cooldown = False
+            if cooldown_key in self._cooldowns:
+                elapsed = _time_mod.time() - self._cooldowns[cooldown_key]
+                if elapsed < 3600:
+                    in_cooldown = True
+                    remaining = int((3600 - elapsed) / 60)
+            if not in_cooldown and self._redis:
+                try:
+                    redis_key = self._rkey(f"cooldown:{signal.pair}")
+                    ttl = await self._redis.ttl(redis_key)
+                    if ttl > 0:
+                        in_cooldown = True
+                        remaining = int(ttl / 60)
+                except Exception:
+                    pass
+            if in_cooldown:
                 logger.info("signal_cooldown", user_id=self.user_id,
-                            pair=signal.pair, remaining_min=round((3600 - elapsed) / 60))
+                            pair=signal.pair, remaining_min=remaining)
                 return
 
         # Spot exchange: SELL signal = close existing BUY position
@@ -674,7 +698,7 @@ class UserBotContext:
                     await repo.close_trade(order_id=trade.order_id, exit_price=exit_price,
                                            profit=profit, fee=exit_fee)
                     self._daily_pnl += profit
-                    self._cooldowns[f"cooldown:{signal.pair}"] = _time_mod.time()
+                    await self._set_cooldown(signal.pair)
                     logger.info("trade_closed_by_signal", user_id=self.user_id,
                                 pair=signal.pair, profit=round(profit, 4),
                                 strategy=signal.strategy_name)
@@ -706,7 +730,7 @@ class UserBotContext:
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
                 await repo.close_trade(order_id=order_id, exit_price=tick.last, profit=profit, fee=result.fee)
-            self._cooldowns[f"cooldown:{stop.pair}"] = _time_mod.time()
+            await self._set_cooldown(stop.pair)
             await self.publish_log("INFO", "trade_closed", pair=stop.pair, profit=profit)
 
             # Publish trade_closed event to Redis
@@ -950,7 +974,7 @@ class UserBotContext:
                             # Unregister from trailing stop if registered
                             self.trailing_stop_mgr.unregister(trade.order_id)
 
-                            self._cooldowns[f"cooldown:{trade.pair}"] = _time_mod.time()
+                            await self._set_cooldown(trade.pair)
                             logger.info("trade_closed_by_polling", user_id=self.user_id,
                                         pair=trade.pair, profit=round(profit, 4),
                                         exit_price=price, reason=reason)
@@ -1279,14 +1303,27 @@ class UserBotContext:
 
                     changes = False
 
-                    # 1. Close DB trades not on Kraken anymore
+                    # 1. Close DB trades not on Kraken anymore (position was sold)
                     for pair, trades in db_pairs.items():
                         if pair not in kraken_map:
                             for t in trades:
+                                # Try to fetch the last known price for P&L calculation
+                                try:
+                                    ticker = await self.broker.get_ticker(pair)
+                                    exit_price = ticker.last if ticker else (t.entry_price or 0)
+                                except Exception:
+                                    exit_price = t.entry_price or 0
+                                entry_fee = t.fee or 0
+                                exit_fee = exit_price * (t.size or 0) * 0.004  # estimate 0.4% fee
+                                profit = (exit_price - (t.entry_price or 0)) * (t.size or 0) - entry_fee - exit_fee
                                 t.status = "closed"
+                                t.exit_price = exit_price
+                                t.profit = round(profit, 6)
+                                t.fee = round(entry_fee + exit_fee, 6)
                                 t.closed_at = _dt.datetime.now(_dt.timezone.utc)
                                 logger.info("sync_closed_ghost", user_id=self.user_id,
-                                            pair=pair, trade_id=t.id)
+                                            pair=pair, trade_id=t.id, profit=round(profit, 4),
+                                            exit_price=exit_price)
                                 changes = True
 
                     # 2. Close duplicate trades (keep only 1 per pair)
