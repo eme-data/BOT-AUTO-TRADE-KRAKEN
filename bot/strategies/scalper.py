@@ -214,7 +214,7 @@ class ScalperStrategy(AbstractStrategy):
         if rsi > prev_rsi and rsi < 35:
             return Signal(
                 signal_type=SignalType.BUY, pair=pair, direction=Direction.BUY,
-                confidence=min(0.5 + (30 - rsi) * 0.05, 0.85),
+                confidence=min(0.5 + (35 - rsi) * 0.05, 0.85),
                 strategy_name=self.name,
                 stop_loss_pct=self.stop_pct, take_profit_pct=self.limit_pct,
                 metadata={"trigger": "rsi_oversold_bounce", "rsi": rsi, "close": close},

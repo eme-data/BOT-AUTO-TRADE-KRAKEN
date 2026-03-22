@@ -19,8 +19,14 @@ from dashboard.api.deps import get_current_user, get_user_id, require_admin
 router = APIRouter(prefix="/api/bot", tags=["bot"], dependencies=[Depends(get_current_user)])
 
 
+_redis_pool: aioredis.Redis | None = None
+
+
 async def _get_redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url)
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_pool
 
 
 def _rkey(user_id: int | None, key: str) -> str:

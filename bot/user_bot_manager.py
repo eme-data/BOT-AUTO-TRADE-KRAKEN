@@ -345,16 +345,8 @@ class UserBotContext:
 
         max_loss_pct = getattr(self.cfg, "risk_max_daily_loss_pct", 0.05)
         if max_loss_pct > 0 and self._daily_pnl < 0:
-            # Rough balance estimate – use 100 as fallback
-            balance = 100.0
-            try:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if not loop.is_running():
-                    bal = loop.run_until_complete(self.broker.get_account_balance())
-                    balance = bal.available_balance or 100.0
-            except Exception:
-                pass
+            # Use cached balance from account_metrics loop, fallback to 100
+            balance = getattr(self, '_cached_balance', 100.0)
             threshold = -abs(max_loss_pct) * balance
             if self._daily_pnl <= threshold and not self._trading_paused:
                 self._trading_paused = True
@@ -1109,6 +1101,7 @@ class UserBotContext:
                 continue
             try:
                 balance = await self.broker.get_account_balance()
+                self._cached_balance = balance.available_balance or 100.0
                 account_balance_gauge.set(balance.total_balance)
                 daily_pnl_gauge.set(self.risk_manager.state.daily_pnl)
                 positions = await self.broker.get_open_positions()

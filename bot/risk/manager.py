@@ -195,7 +195,9 @@ class RiskManager:
 
     @staticmethod
     def _find_group(pair: str) -> str | None:
+        base = pair.split("/")[0] if "/" in pair else pair
         for group_name, pairs in CORRELATION_GROUPS.items():
-            if pair in pairs:
+            group_bases = {p.split("/")[0] for p in pairs}
+            if base in group_bases:
                 return group_name
         return None
