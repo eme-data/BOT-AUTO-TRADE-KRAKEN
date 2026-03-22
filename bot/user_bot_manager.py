@@ -97,6 +97,7 @@ class UserBotContext:
         }
         self._last_tick_at: float = 0.0
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
+        self._signal_lock = asyncio.Lock()  # prevent concurrent signal processing
 
     async def _set_cooldown(self, pair: str) -> None:
         """Set a 1-hour cooldown on a pair, persisted in Redis."""
@@ -298,6 +299,8 @@ class UserBotContext:
         await self.ws_client.disconnect()
         await self.broker.disconnect()
         await self.ai_analyzer.close()
+        if self.polymarket_client:
+            await self.polymarket_client.close()
         logger.info("user_bot_stopped", user_id=self.user_id)
 
     # ── Reload settings ────────────────────────────────
@@ -385,11 +388,12 @@ class UserBotContext:
         logger.info("process_signal_start", user_id=self.user_id,
                      pair=signal.pair, direction=signal.direction.value,
                      strategy=signal.strategy_name)
-        try:
-            await self._process_signal_inner(signal)
-        except Exception as exc:
-            logger.error("process_signal_error", user_id=self.user_id,
-                         pair=signal.pair, error=str(exc), error_type=type(exc).__name__)
+        async with self._signal_lock:
+            try:
+                await self._process_signal_inner(signal)
+            except Exception as exc:
+                logger.error("process_signal_error", user_id=self.user_id,
+                             pair=signal.pair, error=str(exc), error_type=type(exc).__name__)
 
     async def _process_signal_inner(self, signal) -> None:
         import time as _time
@@ -669,23 +673,29 @@ class UserBotContext:
                      pair=signal.pair, strategy=signal.strategy_name,
                      size=position.size, current_price=position.current_price)
         try:
-            result = await self.broker._exchange.create_order(
-                symbol=signal.pair, type='market', side='sell', amount=position.size,
+            from bot.broker.models import OrderRequest, OrderType
+            close_order = OrderRequest(
+                pair=signal.pair, direction=Direction.SELL,
+                size=position.size, order_type=OrderType.MARKET,
             )
-            order_id = result.get("id", "")
+            result = await self.broker.close_position(
+                order_id="signal_close", pair=signal.pair, size=position.size
+            )
+            order_id = result.order_id or ""
 
             # Fetch fill price and fees
             import asyncio as _aio
             await _aio.sleep(1.5)
             exit_price = position.current_price
-            exit_fee = 0.0
+            exit_fee = result.fee or 0.0
             try:
                 filled = await self.broker._exchange.fetch_order(order_id, signal.pair)
                 fetched_price = float(filled.get("average") or filled.get("price") or 0)
                 fetched_fee = float((filled.get("fee") or {}).get("cost", 0))
                 if fetched_price > 0:
                     exit_price = fetched_price
-                exit_fee = fetched_fee
+                if fetched_fee > 0:
+                    exit_fee = fetched_fee
             except Exception:
                 pass
 
@@ -722,7 +732,18 @@ class UserBotContext:
         if not stop:
             return
         try:
-            result = await self.broker.close_position(order_id=order_id, pair=stop.pair, size=0)
+            # Get actual size from DB trade or trailing stop state
+            close_size = stop.size if hasattr(stop, 'size') and stop.size else 0
+            if close_size <= 0:
+                async with get_session() as session:
+                    repo = TradeRepository(session, user_id=self.user_id)
+                    trade = await repo.get_by_order_id(order_id)
+                    if trade:
+                        close_size = trade.size
+            if close_size <= 0:
+                logger.warning("trailing_stop_no_size", user_id=self.user_id, pair=stop.pair)
+                return
+            result = await self.broker.close_position(order_id=order_id, pair=stop.pair, size=close_size)
             self.trailing_stop_mgr.unregister(order_id)
             profit = (tick.last - stop.entry_price) * result.size if stop.direction == Direction.BUY else (stop.entry_price - tick.last) * result.size
             self.risk_manager.update_daily_pnl(profit)
@@ -1316,7 +1337,7 @@ class UserBotContext:
                                 entry_fee = t.fee or 0
                                 exit_fee = exit_price * (t.size or 0) * 0.004  # estimate 0.4% fee
                                 profit = (exit_price - (t.entry_price or 0)) * (t.size or 0) - entry_fee - exit_fee
-                                t.status = "closed"
+                                t.status = "CLOSED"
                                 t.exit_price = exit_price
                                 t.profit = round(profit, 6)
                                 t.fee = round(entry_fee + exit_fee, 6)
@@ -1332,14 +1353,14 @@ class UserBotContext:
                             # Keep the most recent, close others
                             sorted_trades = sorted(trades, key=lambda t: t.id, reverse=True)
                             for t in sorted_trades[1:]:
-                                t.status = "closed"
+                                t.status = "CLOSED"
                                 t.closed_at = _dt.datetime.now(_dt.timezone.utc)
                                 logger.info("sync_closed_duplicate", user_id=self.user_id,
                                             pair=pair, trade_id=t.id)
                                 changes = True
 
                     # 3. Register Kraken positions missing from DB
-                    db_open_pairs = {t.pair for t in db_trades if t.status != "closed"}
+                    db_open_pairs = {t.pair for t in db_trades if t.status not in ("closed", "CLOSED")}
                     for pair, pos in kraken_map.items():
                         if pair not in db_open_pairs:
                             await repo.create_trade(

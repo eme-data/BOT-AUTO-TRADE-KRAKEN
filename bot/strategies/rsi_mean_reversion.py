@@ -51,8 +51,11 @@ class RSIMeanReversionStrategy(AbstractStrategy):
         confidence = 0.0
         signal: Signal | None = None
 
-        # BUY: RSI below oversold threshold and bouncing up
-        if rsi_now <= self.rsi_oversold and rsi_now > rsi_prev:
+        # Major trend filter: don't buy below EMA200
+        in_uptrend = close > ema200
+
+        # BUY: RSI below oversold threshold and bouncing up (only in uptrend)
+        if rsi_now <= self.rsi_oversold and rsi_now > rsi_prev and in_uptrend:
             confidence = min((self.rsi_oversold - rsi_now) / 20 + 0.4, 1.0)
             signal = Signal(
                 signal_type=SignalType.BUY,
