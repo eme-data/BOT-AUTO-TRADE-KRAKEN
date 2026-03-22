@@ -548,22 +548,24 @@ class UserBotContext:
             strategy=signal.strategy_name, direction=signal.direction.value, pair=signal.pair
         ).inc()
 
-        # Fetch real fill price if broker returned 0 (Kraken market orders)
+        # Always fetch real fill price and fees from Kraken (market orders return 0)
         fill_price = result.price
-        if fill_price == 0 or fill_price is None:
-            try:
-                import asyncio as _aio
-                await _aio.sleep(1)  # Wait for fill
-                filled = await self.broker.exchange.fetch_order(result.order_id, signal.pair)
-                fill_price = float(filled.get("average") or filled.get("price") or 0)
-                result_fee = float(filled.get("fee", {}).get("cost", 0))
-                if result_fee > 0:
-                    result = result._replace(fee=result_fee) if hasattr(result, '_replace') else result
-                logger.info("fill_price_fetched", user_id=self.user_id, pair=signal.pair,
-                            fill_price=fill_price, order_id=result.order_id)
-            except Exception as exc:
-                logger.warning("fill_price_fetch_error", user_id=self.user_id, error=str(exc))
-                # Fallback: use ticker price
+        fill_fee = result.fee or 0
+        try:
+            import asyncio as _aio
+            await _aio.sleep(1.5)  # Wait for fill
+            filled = await self.broker.exchange.fetch_order(result.order_id, signal.pair)
+            fetched_price = float(filled.get("average") or filled.get("price") or 0)
+            fetched_fee = float((filled.get("fee") or {}).get("cost", 0))
+            if fetched_price > 0:
+                fill_price = fetched_price
+            if fetched_fee > 0:
+                fill_fee = fetched_fee
+            logger.info("fill_price_fetched", user_id=self.user_id, pair=signal.pair,
+                        fill_price=fill_price, fee=fill_fee, order_id=result.order_id)
+        except Exception as exc:
+            logger.warning("fill_price_fetch_error", user_id=self.user_id, error=str(exc))
+            if fill_price == 0 or fill_price is None:
                 fill_price = ticker.last
 
         trade_status = "PAPER" if self.cfg.bot_paper_trading else None
@@ -576,7 +578,7 @@ class UserBotContext:
                     entry_price=fill_price,
                     stop_loss=(fill_price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
                     take_profit=(fill_price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
-                    fee=result.fee, strategy=signal.strategy_name,
+                    fee=fill_fee, strategy=signal.strategy_name,
                     metadata_=_sanitize_metadata(signal.metadata),
                     **({"status": trade_status} if trade_status else {}),
                 )
@@ -648,23 +650,29 @@ class UserBotContext:
             )
             order_id = result.get("id", "")
 
-            # Fetch fill price
+            # Fetch fill price and fees
             import asyncio as _aio
-            await _aio.sleep(1)
+            await _aio.sleep(1.5)
+            exit_price = position.current_price
+            exit_fee = 0.0
             try:
                 filled = await self.broker._exchange.fetch_order(order_id, signal.pair)
-                exit_price = float(filled.get("average") or filled.get("price") or position.current_price)
+                fetched_price = float(filled.get("average") or filled.get("price") or 0)
+                fetched_fee = float((filled.get("fee") or {}).get("cost", 0))
+                if fetched_price > 0:
+                    exit_price = fetched_price
+                exit_fee = fetched_fee
             except Exception:
-                exit_price = position.current_price
+                pass
 
             # Find trade in DB and close it
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
                 trades = await repo.get_open_by_pair(signal.pair)
                 for trade in trades:
-                    profit = (exit_price - trade.entry_price) * trade.size
+                    profit = (exit_price - trade.entry_price) * trade.size - exit_fee - (trade.fee or 0)
                     await repo.close_trade(order_id=trade.order_id, exit_price=exit_price,
-                                           profit=profit, fee=0)
+                                           profit=profit, fee=exit_fee)
                     self._daily_pnl += profit
                     self._cooldowns[f"cooldown:{signal.pair}"] = _time_mod.time()
                     logger.info("trade_closed_by_signal", user_id=self.user_id,
@@ -917,8 +925,17 @@ class UserBotContext:
                             result = await self.broker.close_position(
                                 order_id=trade.order_id, pair=trade.pair, size=trade.size
                             )
-                            profit = (price - trade.entry_price) * trade.size
-                            fee = float((result.fee if result.fee else 0))
+                            # Fetch real fee from Kraken
+                            close_fee = 0.0
+                            try:
+                                import asyncio as _aio2
+                                await _aio2.sleep(1)
+                                filled = await self.broker.exchange.fetch_order(result.order_id, trade.pair)
+                                close_fee = float((filled.get("fee") or {}).get("cost", 0))
+                            except Exception:
+                                pass
+                            fee = close_fee
+                            profit = (price - trade.entry_price) * trade.size - fee - (trade.fee or 0)
                             self._daily_pnl += profit
 
                             async with get_session() as session:
