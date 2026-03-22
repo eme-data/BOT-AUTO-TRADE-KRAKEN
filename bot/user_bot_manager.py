@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import time as _time_mod
 from datetime import datetime, timezone
@@ -92,6 +93,7 @@ class UserBotContext:
             "redis_listener": 0.0,
             "price_alerts": 0.0,
             "dca": 0.0,
+            "sync_positions": 0.0,
         }
         self._last_tick_at: float = 0.0
 
@@ -273,9 +275,10 @@ class UserBotContext:
             self._redis_command_listener(),
             self._price_alert_loop(),
             self._dca_loop(),
+            self._sync_positions_loop(),
             return_exceptions=True,
         )
-        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca"]
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca", "sync_positions"]
         for name, result in zip(task_names, results):
             if isinstance(result, Exception):
                 logger.error("user_task_crashed", user_id=self.user_id, task=name, error=str(result))
@@ -1198,6 +1201,95 @@ class UserBotContext:
                             logger.warning("dca_execution_error", pair=sched.pair, error=str(exc))
             except Exception as exc:
                 logger.debug("dca_loop_error", error=str(exc))
+
+    # ── Position sync (reconciliation Kraken ↔ DB) ────────
+
+    async def _sync_positions_loop(self) -> None:
+        """Every 5 minutes, reconcile Kraken positions with DB trades.
+        - Close DB trades that no longer exist on Kraken
+        - Register Kraken positions missing from DB
+        """
+        from bot.db.repository import TradeRepository
+
+        while self._running:
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                self._last_loop_run["sync_positions"] = _time_mod.time()
+
+                if self.cfg.bot_paper_trading:
+                    continue
+
+                # Get real Kraken positions
+                positions = await self.broker.get_open_positions()
+                kraken_map = {}
+                for p in positions:
+                    val = p.size * p.current_price
+                    if val >= 1.0:  # Ignore dust
+                        kraken_map[p.pair] = p
+
+                # Get DB open trades
+                async with get_session() as session:
+                    repo = TradeRepository(session, user_id=self.user_id)
+                    db_trades = await repo.get_open_trades()
+
+                    db_pairs = {}
+                    for t in db_trades:
+                        pair = t.pair
+                        if pair not in db_pairs:
+                            db_pairs[pair] = []
+                        db_pairs[pair].append(t)
+
+                    changes = False
+
+                    # 1. Close DB trades not on Kraken anymore
+                    for pair, trades in db_pairs.items():
+                        if pair not in kraken_map:
+                            for t in trades:
+                                t.status = "closed"
+                                t.closed_at = _dt.datetime.now(_dt.timezone.utc)
+                                logger.info("sync_closed_ghost", user_id=self.user_id,
+                                            pair=pair, trade_id=t.id)
+                                changes = True
+
+                    # 2. Close duplicate trades (keep only 1 per pair)
+                    for pair, trades in db_pairs.items():
+                        if pair in kraken_map and len(trades) > 1:
+                            # Keep the most recent, close others
+                            sorted_trades = sorted(trades, key=lambda t: t.id, reverse=True)
+                            for t in sorted_trades[1:]:
+                                t.status = "closed"
+                                t.closed_at = _dt.datetime.now(_dt.timezone.utc)
+                                logger.info("sync_closed_duplicate", user_id=self.user_id,
+                                            pair=pair, trade_id=t.id)
+                                changes = True
+
+                    # 3. Register Kraken positions missing from DB
+                    db_open_pairs = {t.pair for t in db_trades if t.status != "closed"}
+                    for pair, pos in kraken_map.items():
+                        if pair not in db_open_pairs:
+                            await repo.create_trade(
+                                order_id=f"sync_{pair.replace('/', '_')}_{int(_time_mod.time())}",
+                                pair=pair,
+                                direction="buy",
+                                size=pos.size,
+                                entry_price=pos.current_price,
+                                fee=0,
+                                strategy="auto_sync",
+                            )
+                            logger.info("sync_registered_missing", user_id=self.user_id,
+                                        pair=pair, size=pos.size, price=pos.current_price)
+                            changes = True
+
+                    if changes:
+                        await session.commit()
+                        logger.info("sync_positions_complete", user_id=self.user_id,
+                                    kraken=len(kraken_map), db_before=len(db_trades))
+                    else:
+                        logger.debug("sync_positions_ok", user_id=self.user_id,
+                                     positions=len(kraken_map))
+
+            except Exception as exc:
+                logger.debug("sync_loop_error", error=str(exc))
 
     async def _redis_command_listener(self) -> None:
         if not self._redis:
