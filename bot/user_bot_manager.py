@@ -99,15 +99,6 @@ class UserBotContext:
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
         self._signal_lock = asyncio.Lock()  # prevent concurrent signal processing
 
-    async def _set_cooldown(self, pair: str) -> None:
-        """Set a 1-hour cooldown on a pair, persisted in Redis."""
-        self._cooldowns[f"cooldown:{pair}"] = _time_mod.time()
-        if self._redis:
-            try:
-                await self._redis.setex(self._rkey(f"cooldown:{pair}"), 3600, "1")
-            except Exception:
-                pass
-
         # Broker
         if self.cfg.bot_paper_trading:
             logger.info("user_bot_mode", user_id=user_id, mode="PAPER")
@@ -199,6 +190,15 @@ class UserBotContext:
 
     def _rkey(self, key: str) -> str:
         return f"bot:user:{self.user_id}:{key}"
+
+    async def _set_cooldown(self, pair: str) -> None:
+        """Set a 1-hour cooldown on a pair, persisted in Redis."""
+        self._cooldowns[f"cooldown:{pair}"] = _time_mod.time()
+        if self._redis:
+            try:
+                await self._redis.setex(self._rkey(f"cooldown:{pair}"), 3600, "1")
+            except Exception:
+                pass
 
     async def publish_log(self, level: str, event: str, **kwargs: Any) -> None:
         # Also log to stdout for docker logs visibility
