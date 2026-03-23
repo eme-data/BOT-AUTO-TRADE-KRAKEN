@@ -31,12 +31,14 @@ class AutopilotManager:
         redis_client=None,
         user_id: int | None = None,
         polymarket_client=None,
+        fear_greed_client=None,
         quote_currency: str = "USD",
     ) -> None:
         self._broker = broker
         self._ws = ws_client
         self._scanner = MarketScanner(broker, quote_currency=quote_currency)
-        self._scorer = MarketScorer(data_mgr, polymarket_client=polymarket_client)
+        self._scorer = MarketScorer(data_mgr, polymarket_client=polymarket_client,
+                                    fear_greed_client=fear_greed_client)
         self._registry = strategy_registry
         self._redis = redis_client
         self._user_id = user_id

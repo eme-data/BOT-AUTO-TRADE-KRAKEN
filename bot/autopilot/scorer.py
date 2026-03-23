@@ -13,26 +13,28 @@ from bot.data.indicators import add_all_indicators, detect_regime, ema_alignment
 
 logger = structlog.get_logger(__name__)
 
-# Score weights (without Polymarket)
+# Score weights (without sentiment)
 W_TREND = 0.35
 W_MOMENTUM = 0.25
 W_VOLATILITY = 0.15
 W_ALIGNMENT = 0.25
 
-# Score weights (with Polymarket sentiment)
-W_TREND_PM = 0.25
-W_MOMENTUM_PM = 0.20
-W_VOLATILITY_PM = 0.10
-W_ALIGNMENT_PM = 0.20
-W_SENTIMENT_PM = 0.25
+# Score weights (with Fear & Greed sentiment)
+W_TREND_FG = 0.28
+W_MOMENTUM_FG = 0.22
+W_VOLATILITY_FG = 0.10
+W_ALIGNMENT_FG = 0.20
+W_SENTIMENT_FG = 0.20
 
 
 class MarketScorer:
     """Scores market quality using multi-timeframe analysis."""
 
-    def __init__(self, data_mgr: HistoricalDataManager, polymarket_client=None) -> None:
+    def __init__(self, data_mgr: HistoricalDataManager, polymarket_client=None,
+                 fear_greed_client=None) -> None:
         self._data = data_mgr
         self._polymarket = polymarket_client
+        self._fear_greed = fear_greed_client
         self._cache: dict[str, MarketScore] = {}
         self._cache_ttl = 1800  # 30 minutes
 
@@ -64,13 +66,13 @@ class MarketScorer:
         alignment = self._alignment_score(df_h1, df_d1)
         sentiment = await self._sentiment_score(pair)
 
-        if self._polymarket and sentiment != 0.5:
+        if sentiment != 0.5:
             composite = (
-                W_TREND_PM * trend
-                + W_MOMENTUM_PM * momentum
-                + W_VOLATILITY_PM * volatility
-                + W_ALIGNMENT_PM * alignment
-                + W_SENTIMENT_PM * sentiment
+                W_TREND_FG * trend
+                + W_MOMENTUM_FG * momentum
+                + W_VOLATILITY_FG * volatility
+                + W_ALIGNMENT_FG * alignment
+                + W_SENTIMENT_FG * sentiment
             )
         else:
             composite = (
@@ -102,6 +104,7 @@ class MarketScorer:
             composite=round(composite, 3),
             regime=regime,
             bias=direction,
+            sentiment=round(sentiment, 2),
         )
         return result
 
@@ -169,19 +172,32 @@ class MarketScorer:
             return 0.1  # conflicting timeframes
 
     async def _sentiment_score(self, pair: str) -> float:
-        """Get Polymarket sentiment score for a pair (0-1, 0.5=neutral)."""
-        if not self._polymarket:
-            return 0.5
-        try:
-            sentiment = await self._polymarket.get_sentiment_for_pair(pair)
-            if sentiment is None:
-                return 0.5
-            # bullish_probability is already 0-1, use it directly
-            # Weight by confidence (based on market count/volume)
-            raw = sentiment.bullish_probability
-            confidence = sentiment.confidence
-            # Blend towards neutral (0.5) when confidence is low
-            return 0.5 + (raw - 0.5) * confidence
-        except Exception as exc:
-            logger.warning("polymarket_score_error", pair=pair, error=str(exc))
-            return 0.5
+        """Get sentiment score using Fear & Greed Index (preferred) or Polymarket fallback."""
+        # Try Fear & Greed Index first (global crypto sentiment)
+        if self._fear_greed:
+            try:
+                fg = await self._fear_greed.get_index()
+                # Fear & Greed is 0-100, normalize to 0-1
+                # Extreme Fear (<25) = bearish = low score
+                # Extreme Greed (>75) = bullish but risky = moderate score
+                # Sweet spot: 40-60 = good for trading
+                raw = fg.normalized  # 0-1
+                logger.debug("fear_greed_score", value=fg.value, label=fg.label,
+                             normalized=round(raw, 2))
+                return raw
+            except Exception as exc:
+                logger.warning("fear_greed_score_error", error=str(exc))
+
+        # Fallback to Polymarket
+        if self._polymarket:
+            try:
+                sentiment = await self._polymarket.get_sentiment_for_pair(pair)
+                if sentiment is None:
+                    return 0.5
+                raw = sentiment.bullish_probability
+                confidence = sentiment.confidence
+                return 0.5 + (raw - 0.5) * confidence
+            except Exception as exc:
+                logger.warning("polymarket_score_error", pair=pair, error=str(exc))
+
+        return 0.5

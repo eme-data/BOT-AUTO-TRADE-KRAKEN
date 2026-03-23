@@ -57,15 +57,15 @@ class ScalperStrategy(AbstractStrategy):
             signal = signal or self._ema_cross(pair, df, cur, prev, close)
 
         # --- Signal 3: Volume spike + momentum ---
-        if in_uptrend or is_oversold:
+        if in_uptrend:
             signal = signal or self._volume_momentum(pair, df, cur, prev, close)
 
         # --- Signal 4: Consecutive candles in same direction ---
         if in_uptrend:
             signal = signal or self._candle_streak(pair, df, close)
 
-        # --- Signal 5: RSI extreme oversold bounce (any trend) ---
-        if is_oversold and signal is None:
+        # --- Signal 5: RSI extreme oversold bounce (only in uptrend) ---
+        if is_oversold and in_uptrend and signal is None:
             signal = self._rsi_bounce(pair, df, cur, prev, close, rsi)
 
         return signal

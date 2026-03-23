@@ -9,6 +9,7 @@ import time as _time_mod
 from datetime import datetime, timezone
 from typing import Any
 
+import pandas as pd
 import redis.asyncio as aioredis
 import structlog
 
@@ -141,6 +142,15 @@ class UserBotContext:
             except Exception as exc:
                 logger.warning("polymarket_init_error", user_id=user_id, error=str(exc))
 
+        # Fear & Greed Index (preferred sentiment source)
+        self.fear_greed_client = None
+        try:
+            from bot.data.fear_greed import FearGreedClient
+            self.fear_greed_client = FearGreedClient()
+            logger.info("fear_greed_enabled", user_id=user_id)
+        except Exception as exc:
+            logger.warning("fear_greed_init_error", user_id=user_id, error=str(exc))
+
         self.ai_analyzer = ClaudeAnalyzer(polymarket_client=self.polymarket_client)
         self.autopilot: AutopilotManager | None = None
 
@@ -249,6 +259,7 @@ class UserBotContext:
             redis_client=self._redis,
             user_id=self.user_id,
             polymarket_client=self.polymarket_client,
+            fear_greed_client=self.fear_greed_client,
             quote_currency=getattr(self.cfg, "exchange_quote_currency", "USD"),
         )
         self.autopilot.apply_user_config(self.cfg)
@@ -490,21 +501,40 @@ class UserBotContext:
 
         ticker = await self.broker.get_ticker(signal.pair)
 
-        # Sentiment gate: block BUY if Polymarket sentiment is bearish
-        if signal.direction == Direction.BUY and self.polymarket_client:
+        # Sentiment gate: block BUY if Fear & Greed Index shows Extreme Fear
+        if signal.direction == Direction.BUY and self.fear_greed_client:
             try:
-                sentiment = await self.polymarket_client.get_sentiment_for_pair(signal.pair)
-                macro = await self.polymarket_client.get_macro_sentiment()
-                pair_score = sentiment.bullish_probability if sentiment else 0.5
-                macro_score = macro.overall_score if macro else 0.5
-                # Block if both pair AND macro sentiment are bearish
-                if pair_score < 0.4 and macro_score < 0.4:
-                    logger.info("signal_blocked_bearish_sentiment", user_id=self.user_id,
-                                pair=signal.pair, pair_sentiment=round(pair_score, 2),
-                                macro_sentiment=round(macro_score, 2))
+                fg = await self.fear_greed_client.get_index()
+                if fg.is_extreme_fear:
+                    logger.info("signal_blocked_extreme_fear", user_id=self.user_id,
+                                pair=signal.pair, fear_greed=fg.value, label=fg.label)
                     return
+                # Reduce position size in Fear territory (25-40)
+                if fg.is_fear:
+                    logger.info("signal_reduced_fear", user_id=self.user_id,
+                                pair=signal.pair, fear_greed=fg.value)
             except Exception:
-                pass  # Don't block on Polymarket errors
+                pass
+
+        # BTC trend gate: don't buy altcoins if BTC is in downtrend
+        if signal.direction == Direction.BUY and not signal.pair.startswith("BTC"):
+            try:
+                btc_pair = "BTC/" + signal.pair.split("/")[1]
+                btc_bars = await self.data_mgr.get_bars(btc_pair, interval_minutes=60, count=50)
+                if not btc_bars.empty and len(btc_bars) >= 20:
+                    from bot.data.indicators import add_all_indicators
+                    btc_bars = add_all_indicators(btc_bars)
+                    btc_close = btc_bars["close"].iloc[-1]
+                    btc_ema20 = btc_bars["ema_20"].iloc[-1] if "ema_20" in btc_bars.columns else None
+                    btc_ema50 = btc_bars["ema_50"].iloc[-1] if "ema_50" in btc_bars.columns else None
+                    if btc_ema20 and btc_ema50 and not pd.isna(btc_ema20) and not pd.isna(btc_ema50):
+                        if btc_close < btc_ema20 and btc_ema20 < btc_ema50:
+                            logger.info("signal_blocked_btc_downtrend", user_id=self.user_id,
+                                        pair=signal.pair, btc_close=round(btc_close, 2),
+                                        btc_ema20=round(btc_ema20, 2), btc_ema50=round(btc_ema50, 2))
+                            return
+            except Exception:
+                pass  # Don't block on BTC check errors
 
         # Simple position sizing: fixed % of available balance in quote currency
         max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
