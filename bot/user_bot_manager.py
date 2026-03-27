@@ -309,6 +309,10 @@ class UserBotContext:
                                     order_id=t.order_id,
                                 )
                             )
+                            # Set stop_loss in DB if missing
+                            if not t.stop_loss:
+                                t.stop_loss = t.entry_price * (1 - trail_pct / 100)
+                    await session.commit()
                     logger.info("startup_trailing_stops_registered", user_id=self.user_id, count=len(db_trades))
             except Exception as exc:
                 logger.error("startup_trailing_stops_error", user_id=self.user_id, error=str(exc))
@@ -1418,12 +1422,14 @@ class UserBotContext:
                     for pair, pos in kraken_map.items():
                         if pair not in db_open_pairs:
                             sync_order_id = f"sync_{pair.replace('/', '_')}_{int(_time_mod.time())}"
+                            trail_pct_sync = float(getattr(self.cfg, "risk_stop_loss_pct", 0.03)) * 100
                             await repo.create_trade(
                                 order_id=sync_order_id,
                                 pair=pair,
                                 direction="buy",
                                 size=pos.size,
                                 entry_price=pos.current_price,
+                                stop_loss=pos.current_price * (1 - trail_pct_sync / 100),
                                 fee=0,
                                 strategy="auto_sync",
                             )
