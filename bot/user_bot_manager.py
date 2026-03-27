@@ -739,7 +739,7 @@ class UserBotContext:
                      pair=signal.pair, strategy=signal.strategy_name,
                      size=position.size, current_price=position.current_price)
         try:
-            from bot.broker.models import OrderRequest, OrderType
+            from bot.broker.models import OrderRequest, OrderType, Direction
             close_order = OrderRequest(
                 pair=signal.pair, direction=Direction.SELL,
                 size=position.size, order_type=OrderType.MARKET,
