@@ -537,13 +537,19 @@ class UserBotContext:
         ticker = await self.broker.get_ticker(signal.pair)
 
         # Sentiment gate: block BUY if Fear & Greed Index shows Extreme Fear
+        # Exception: bearish_scalp signals are allowed through with reduced size
+        is_bearish_scalp = signal.metadata.get("bearish_mode") if signal.metadata else False
         if signal.direction == Direction.BUY and self.fear_greed_client:
             try:
                 fg = await self.fear_greed_client.get_index()
                 if fg.is_extreme_fear:
-                    logger.info("signal_blocked_extreme_fear", user_id=self.user_id,
-                                pair=signal.pair, fear_greed=fg.value, label=fg.label)
-                    return
+                    if is_bearish_scalp:
+                        logger.info("bearish_scalp_allowed", user_id=self.user_id,
+                                    pair=signal.pair, fear_greed=fg.value, rsi=signal.metadata.get("rsi"))
+                    else:
+                        logger.info("signal_blocked_extreme_fear", user_id=self.user_id,
+                                    pair=signal.pair, fear_greed=fg.value, label=fg.label)
+                        return
                 # Reduce position size in Fear territory (25-40)
                 if fg.is_fear:
                     logger.info("signal_reduced_fear", user_id=self.user_id,
@@ -551,8 +557,8 @@ class UserBotContext:
             except Exception:
                 pass
 
-        # BTC trend gate: don't buy altcoins if BTC is in downtrend
-        if signal.direction == Direction.BUY and not signal.pair.startswith("BTC"):
+        # BTC trend gate: don't buy altcoins if BTC is in downtrend (skip for bearish scalps)
+        if signal.direction == Direction.BUY and not signal.pair.startswith("BTC") and not is_bearish_scalp:
             try:
                 btc_pair = "BTC/" + signal.pair.split("/")[1]
                 btc_bars = await self.data_mgr.get_bars(btc_pair, interval_minutes=60, count=50)
@@ -573,6 +579,9 @@ class UserBotContext:
 
         # Simple position sizing: fixed % of available balance in quote currency
         max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
+        # Bearish scalps use 50% reduced position size
+        if is_bearish_scalp:
+            max_pct *= 0.5
         order_value = balance.available_balance * max_pct
         if ticker.last <= 0 or order_value < 1.0:
             logger.info("order_skipped_low_value", user_id=self.user_id, pair=signal.pair,

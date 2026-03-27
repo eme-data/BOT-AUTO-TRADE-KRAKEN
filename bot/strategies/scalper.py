@@ -20,11 +20,17 @@ class ScalperStrategy(AbstractStrategy):
         volume_spike_mult: float = 1.5,
         stop_pct: float = 4.0,
         limit_pct: float = 5.0,
+        bearish_stop_pct: float = 1.5,
+        bearish_limit_pct: float = 2.0,
+        bearish_rsi_threshold: float = 15.0,
     ) -> None:
         self.bb_squeeze_threshold = bb_squeeze_threshold
         self.volume_spike_mult = volume_spike_mult
         self.stop_pct = stop_pct
         self.limit_pct = limit_pct
+        self.bearish_stop_pct = bearish_stop_pct
+        self.bearish_limit_pct = bearish_limit_pct
+        self.bearish_rsi_threshold = bearish_rsi_threshold
 
     def on_tick(self, tick: Tick) -> Signal | None:
         return None
@@ -67,6 +73,10 @@ class ScalperStrategy(AbstractStrategy):
         # --- Signal 5: RSI extreme oversold bounce (only in uptrend) ---
         if is_oversold and in_uptrend and signal is None:
             signal = self._rsi_bounce(pair, df, cur, prev, close, rsi)
+
+        # --- Signal 6: Bearish scalp — extreme oversold bounce in any market ---
+        if signal is None and rsi is not None and not pd.isna(rsi):
+            signal = self._bearish_scalp(pair, df, cur, prev, close, rsi)
 
         return signal
 
@@ -220,6 +230,51 @@ class ScalperStrategy(AbstractStrategy):
                 metadata={"trigger": "rsi_oversold_bounce", "rsi": rsi, "close": close},
             )
         return None
+
+    def _bearish_scalp(self, pair, df, cur, prev, close, rsi) -> Signal | None:
+        """Scalp rebounds in bearish markets on extreme oversold conditions.
+
+        Uses tighter TP/SL for quick in-and-out trades when RSI is extremely low.
+        The signal is tagged as bearish_scalp so the Fear & Greed gate can allow it.
+        """
+        if rsi >= self.bearish_rsi_threshold:
+            return None
+
+        prev_rsi = prev.get("rsi_14") or prev.get("rsi")
+        if prev_rsi is None or pd.isna(prev_rsi):
+            return None
+
+        # RSI must be turning up (bounce confirmation)
+        if rsi <= prev_rsi:
+            return None
+
+        # Volume confirmation: don't scalp on zero volume
+        vol = cur.get("volume")
+        if vol is None or pd.isna(vol) or vol == 0:
+            return None
+        avg_vol = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else df["volume"].mean()
+        if pd.isna(avg_vol) or avg_vol == 0:
+            return None
+
+        # Price must be near or below lower Bollinger Band (extra confirmation)
+        bb_lower = cur.get("bb_lower")
+        if bb_lower is not None and not pd.isna(bb_lower) and close > bb_lower * 1.01:
+            return None  # Price not low enough
+
+        return Signal(
+            signal_type=SignalType.BUY, pair=pair, direction=Direction.BUY,
+            confidence=min(0.6 + (self.bearish_rsi_threshold - rsi) * 0.03, 0.9),
+            strategy_name=self.name,
+            stop_loss_pct=self.bearish_stop_pct,
+            take_profit_pct=self.bearish_limit_pct,
+            metadata={
+                "trigger": "bearish_scalp",
+                "rsi": rsi,
+                "prev_rsi": prev_rsi,
+                "close": close,
+                "bearish_mode": True,
+            },
+        )
 
     def on_bar_mtf(self, pair, df_primary, df_higher) -> Signal | None:
         # Scalper doesn't use higher timeframe — speed is key
