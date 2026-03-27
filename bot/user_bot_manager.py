@@ -282,7 +282,7 @@ class UserBotContext:
             except Exception as exc:
                 logger.warning("warmup_error", user_id=self.user_id, pair=pair, error=str(exc))
 
-        # Register trailing stops for existing open positions
+        # Register trailing stops and subscribe tickers for existing open positions
         if not self.cfg.bot_paper_trading:
             try:
                 from bot.risk.trailing_stop import TrailingStopState
@@ -292,6 +292,12 @@ class UserBotContext:
                     repo = TradeRepository(session, user_id=self.user_id)
                     db_trades = await repo.get_open_trades()
                     trail_pct = float(getattr(self.cfg, "risk_stop_loss_pct", 0.03)) * 100
+                    # Subscribe to tickers for all open position pairs
+                    open_pairs = list({t.pair for t in db_trades if t.pair not in self._active_pairs})
+                    if open_pairs:
+                        await self.ws_client.subscribe_ticker(open_pairs)
+                        self._active_pairs.update(open_pairs)
+                        logger.info("startup_subscribed_position_pairs", user_id=self.user_id, pairs=open_pairs)
                     for t in db_trades:
                         if t.entry_price and t.entry_price > 0:
                             self.trailing_stop_mgr.register(
