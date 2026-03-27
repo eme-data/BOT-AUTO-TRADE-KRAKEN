@@ -65,6 +65,11 @@ class TradeRepository:
             stmt = stmt.where(Trade.user_id == self.user_id)
         await self.session.execute(stmt)
 
+    async def get_by_order_id(self, order_id: str) -> Trade | None:
+        stmt = select(Trade).where(Trade.order_id == order_id)
+        result = await self.session.execute(self._user_filter(stmt))
+        return result.scalars().first()
+
     async def get_open_trades(self) -> list[Trade]:
         stmt = select(Trade).where(Trade.status == "OPEN").order_by(Trade.opened_at)
         result = await self.session.execute(self._user_filter(stmt))
