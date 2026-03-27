@@ -282,6 +282,31 @@ class UserBotContext:
             except Exception as exc:
                 logger.warning("warmup_error", user_id=self.user_id, pair=pair, error=str(exc))
 
+        # Register trailing stops for existing open positions
+        if not self.cfg.bot_paper_trading:
+            try:
+                from bot.risk.trailing_stop import TrailingStopState
+                from bot.broker.models import Direction
+                async with get_session() as session:
+                    from bot.db.repository import TradeRepository
+                    repo = TradeRepository(session, user_id=self.user_id)
+                    db_trades = await repo.get_open_trades()
+                    trail_pct = float(getattr(self.cfg, "risk_stop_loss_pct", 0.03)) * 100
+                    for t in db_trades:
+                        if t.entry_price and t.entry_price > 0:
+                            self.trailing_stop_mgr.register(
+                                TrailingStopState(
+                                    pair=t.pair,
+                                    direction=Direction.BUY if t.direction in ("buy", "BUY") else Direction.SELL,
+                                    entry_price=t.entry_price,
+                                    trail_pct=trail_pct,
+                                    order_id=t.order_id,
+                                )
+                            )
+                    logger.info("startup_trailing_stops_registered", user_id=self.user_id, count=len(db_trades))
+            except Exception as exc:
+                logger.error("startup_trailing_stops_error", user_id=self.user_id, error=str(exc))
+
         self._running = True
         self._started_at = _time_mod.time()
         mode = "PAPER" if self.cfg.bot_paper_trading else "LIVE"
@@ -1386,14 +1411,28 @@ class UserBotContext:
                     db_open_pairs = {t.pair for t in db_trades if t.status not in ("closed", "CLOSED")}
                     for pair, pos in kraken_map.items():
                         if pair not in db_open_pairs:
+                            sync_order_id = f"sync_{pair.replace('/', '_')}_{int(_time_mod.time())}"
                             await repo.create_trade(
-                                order_id=f"sync_{pair.replace('/', '_')}_{int(_time_mod.time())}",
+                                order_id=sync_order_id,
                                 pair=pair,
                                 direction="buy",
                                 size=pos.size,
                                 entry_price=pos.current_price,
                                 fee=0,
                                 strategy="auto_sync",
+                            )
+                            # Register trailing stop for synced position
+                            from bot.risk.trailing_stop import TrailingStopState
+                            from bot.broker.models import Direction
+                            trail_pct = float(getattr(self.cfg, "risk_stop_loss_pct", 0.03)) * 100
+                            self.trailing_stop_mgr.register(
+                                TrailingStopState(
+                                    pair=pair,
+                                    direction=Direction.BUY,
+                                    entry_price=pos.current_price,
+                                    trail_pct=trail_pct,
+                                    order_id=sync_order_id,
+                                )
                             )
                             logger.info("sync_registered_missing", user_id=self.user_id,
                                         pair=pair, size=pos.size, price=pos.current_price)
