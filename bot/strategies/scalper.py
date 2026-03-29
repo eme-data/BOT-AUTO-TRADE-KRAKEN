@@ -20,9 +20,9 @@ class ScalperStrategy(AbstractStrategy):
         volume_spike_mult: float = 1.5,
         stop_pct: float = 4.0,
         limit_pct: float = 5.0,
-        bearish_stop_pct: float = 1.5,
-        bearish_limit_pct: float = 2.0,
-        bearish_rsi_threshold: float = 15.0,
+        bearish_stop_pct: float = 2.0,
+        bearish_limit_pct: float = 3.0,
+        bearish_rsi_threshold: float = 30.0,
     ) -> None:
         self.bb_squeeze_threshold = bb_squeeze_threshold
         self.volume_spike_mult = volume_spike_mult
@@ -258,8 +258,8 @@ class ScalperStrategy(AbstractStrategy):
 
         # Price must be near or below lower Bollinger Band (extra confirmation)
         bb_lower = cur.get("bb_lower")
-        if bb_lower is not None and not pd.isna(bb_lower) and close > bb_lower * 1.01:
-            return None  # Price not low enough
+        if bb_lower is not None and not pd.isna(bb_lower) and close > bb_lower * 1.03:
+            return None  # Price not low enough (within 3% of BB lower)
 
         return Signal(
             signal_type=SignalType.BUY, pair=pair, direction=Direction.BUY,

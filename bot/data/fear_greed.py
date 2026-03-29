@@ -27,11 +27,11 @@ class FearGreedData:
 
     @property
     def is_extreme_fear(self) -> bool:
-        return self.value <= 25
+        return self.value <= 10
 
     @property
     def is_fear(self) -> bool:
-        return self.value <= 40
+        return self.value <= 30
 
     @property
     def is_greed(self) -> bool:
