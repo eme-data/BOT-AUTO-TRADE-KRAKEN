@@ -536,28 +536,34 @@ class UserBotContext:
 
         ticker = await self.broker.get_ticker(signal.pair)
 
-        # Sentiment gate: block BUY if Fear & Greed Index shows Extreme Fear
-        # Exception: bearish_scalp signals are allowed through with reduced size
+        # Sentiment-based position sizing: adapt size to Fear & Greed level
+        # Never block trades entirely — instead reduce position size in fearful markets
         is_bearish_scalp = signal.metadata.get("bearish_mode") if signal.metadata else False
+        _fg_size_factor = 1.0  # Will be applied to position sizing later
         if signal.direction == Direction.BUY and self.fear_greed_client:
             try:
                 fg = await self.fear_greed_client.get_index()
-                if fg.is_extreme_fear:
-                    if is_bearish_scalp:
-                        logger.info("bearish_scalp_allowed", user_id=self.user_id,
-                                    pair=signal.pair, fear_greed=fg.value, rsi=signal.metadata.get("rsi"))
-                    else:
-                        logger.info("signal_blocked_extreme_fear", user_id=self.user_id,
-                                    pair=signal.pair, fear_greed=fg.value, label=fg.label)
-                        return
-                # Reduce position size in Fear territory (25-40)
-                if fg.is_fear:
-                    logger.info("signal_reduced_fear", user_id=self.user_id,
-                                pair=signal.pair, fear_greed=fg.value)
+                if fg.value <= 10:
+                    # Extreme panic: trade with 20% of normal size
+                    _fg_size_factor = 0.20
+                    logger.info("signal_size_extreme_fear", user_id=self.user_id,
+                                pair=signal.pair, fear_greed=fg.value, size_factor=0.20)
+                elif fg.value <= 30:
+                    # Fear: trade with 50% of normal size
+                    _fg_size_factor = 0.50
+                    logger.info("signal_size_fear", user_id=self.user_id,
+                                pair=signal.pair, fear_greed=fg.value, size_factor=0.50)
+                elif fg.value <= 50:
+                    # Neutral: normal size
+                    _fg_size_factor = 1.0
+                else:
+                    # Greed: full size
+                    _fg_size_factor = 1.0
             except Exception:
                 pass
 
-        # BTC trend gate: don't buy altcoins if BTC is in downtrend (skip for bearish scalps)
+        # BTC trend gate: reduce size for altcoins if BTC is in strong downtrend
+        # Only block if BTC is >5% below EMA50 (crash territory), otherwise just reduce size
         if signal.direction == Direction.BUY and not signal.pair.startswith("BTC") and not is_bearish_scalp:
             try:
                 btc_pair = "BTC/" + signal.pair.split("/")[1]
@@ -566,20 +572,27 @@ class UserBotContext:
                     from bot.data.indicators import add_all_indicators
                     btc_bars = add_all_indicators(btc_bars)
                     btc_close = btc_bars["close"].iloc[-1]
-                    btc_ema20 = btc_bars["ema_20"].iloc[-1] if "ema_20" in btc_bars.columns else None
                     btc_ema50 = btc_bars["ema_50"].iloc[-1] if "ema_50" in btc_bars.columns else None
-                    if btc_ema20 and btc_ema50 and not pd.isna(btc_ema20) and not pd.isna(btc_ema50):
-                        if btc_close < btc_ema20 and btc_ema20 < btc_ema50:
-                            logger.info("signal_blocked_btc_downtrend", user_id=self.user_id,
-                                        pair=signal.pair, btc_close=round(btc_close, 2),
-                                        btc_ema20=round(btc_ema20, 2), btc_ema50=round(btc_ema50, 2))
+                    if btc_ema50 and not pd.isna(btc_ema50) and btc_close < btc_ema50:
+                        drop_pct = (btc_ema50 - btc_close) / btc_ema50
+                        if drop_pct > 0.05:
+                            # BTC crash: block altcoin buys
+                            logger.info("signal_blocked_btc_crash", user_id=self.user_id,
+                                        pair=signal.pair, btc_drop_pct=round(drop_pct*100, 1))
                             return
+                        else:
+                            # BTC mild downtrend: reduce size by 50%
+                            _fg_size_factor *= 0.5
+                            logger.info("signal_reduced_btc_downtrend", user_id=self.user_id,
+                                        pair=signal.pair, btc_drop_pct=round(drop_pct*100, 1))
             except Exception:
-                pass  # Don't block on BTC check errors
+                pass
 
         # Simple position sizing: fixed % of available balance in quote currency
         max_pct = float(getattr(self.cfg, "risk_max_position_pct", 0.15))
-        # Bearish scalps use 50% reduced position size
+        # Apply Fear & Greed size factor
+        max_pct *= _fg_size_factor
+        # Bearish scalps use additional 50% reduction
         if is_bearish_scalp:
             max_pct *= 0.5
         order_value = balance.available_balance * max_pct
