@@ -202,11 +202,11 @@ class UserBotContext:
         return f"bot:user:{self.user_id}:{key}"
 
     async def _set_cooldown(self, pair: str) -> None:
-        """Set a 1-hour cooldown on a pair, persisted in Redis."""
+        """Set a 4-hour cooldown on a pair, persisted in Redis."""
         self._cooldowns[f"cooldown:{pair}"] = _time_mod.time()
         if self._redis:
             try:
-                await self._redis.setex(self._rkey(f"cooldown:{pair}"), 3600, "1")
+                await self._redis.setex(self._rkey(f"cooldown:{pair}"), 14400, "1")
             except Exception:
                 pass
 
@@ -466,9 +466,9 @@ class UserBotContext:
             in_cooldown = False
             if cooldown_key in self._cooldowns:
                 elapsed = _time_mod.time() - self._cooldowns[cooldown_key]
-                if elapsed < 3600:
+                if elapsed < 14400:
                     in_cooldown = True
-                    remaining = int((3600 - elapsed) / 60)
+                    remaining = int((14400 - elapsed) / 60)
             if not in_cooldown and self._redis:
                 try:
                     redis_key = self._rkey(f"cooldown:{signal.pair}")
@@ -600,6 +600,17 @@ class UserBotContext:
             logger.info("order_skipped_low_value", user_id=self.user_id, pair=signal.pair,
                         order_value=round(order_value, 2), ticker_last=ticker.last)
             return
+
+        # Minimum profitability check: expected gain must cover 3x estimated fees
+        est_fee = order_value * 0.004  # 0.4% taker fee each way
+        tp_pct = (signal.take_profit_pct or 5.0) / 100.0
+        expected_gain = order_value * tp_pct
+        if expected_gain < est_fee * 3:
+            logger.info("order_skipped_unprofitable", user_id=self.user_id, pair=signal.pair,
+                        order_value=round(order_value, 2), expected_gain=round(expected_gain, 4),
+                        est_fees=round(est_fee * 2, 4))
+            return
+
         size = order_value / ticker.last
 
         # AI adjustment (optional)

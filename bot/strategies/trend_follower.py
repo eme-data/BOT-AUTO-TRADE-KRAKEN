@@ -16,8 +16,8 @@ class TrendFollowerStrategy(AbstractStrategy):
 
     def __init__(
         self,
-        stop_pct: float = 5.0,
-        limit_pct: float = 5.0,
+        stop_pct: float = 6.0,
+        limit_pct: float = 8.0,
     ) -> None:
         self.stop_pct = stop_pct
         self.limit_pct = limit_pct
@@ -59,7 +59,7 @@ class TrendFollowerStrategy(AbstractStrategy):
         if price_above_ema and ema_rising and rsi_ok_buy and in_uptrend:
             # Check that price just crossed above or is near EMA (within 1%)
             dist_pct = (close - ema20) / ema20
-            if dist_pct < 0.03:  # Within 3% of EMA — wider entry zone
+            if dist_pct < 0.01:  # Within 1% of EMA — fresh crossover only
                 return Signal(
                     signal_type=SignalType.BUY,
                     pair=pair,
