@@ -95,8 +95,9 @@ class StrategyRegistry:
         return signals
 
     def load_defaults(self) -> None:
-        """Load default strategies with default config."""
+        """Load default strategies — sniper mode (quality over quantity)."""
         self.register("macd_trend", MACDTrendStrategy())
         self.register("rsi_mean_reversion", RSIMeanReversionStrategy())
         self.register("scalper", ScalperStrategy())
-        self.register("trend_follower", TrendFollowerStrategy())
+        # trend_follower disabled: 5% win rate, generates too many losing trades
+        # self.register("trend_follower", TrendFollowerStrategy())

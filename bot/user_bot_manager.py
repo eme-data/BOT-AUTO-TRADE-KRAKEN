@@ -99,6 +99,9 @@ class UserBotContext:
         self._last_tick_at: float = 0.0
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
         self._signal_lock = asyncio.Lock()  # prevent concurrent signal processing
+        self._last_trade_time: float = 0.0  # global cooldown between any trade
+        self._daily_trade_count: int = 0
+        self._daily_trade_date: str = ""
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -483,6 +486,32 @@ class UserBotContext:
                             pair=signal.pair, remaining_min=remaining)
                 return
 
+        # ── SNIPER MODE: strict filters to reduce trade frequency ──
+        if signal.direction == Direction.BUY:
+            # 1. Global cooldown: minimum 6h between ANY trade
+            global_elapsed = _time_mod.time() - self._last_trade_time
+            if global_elapsed < 21600:  # 6 hours
+                remaining_g = int((21600 - global_elapsed) / 60)
+                logger.debug("signal_global_cooldown", user_id=self.user_id,
+                            pair=signal.pair, remaining_min=remaining_g)
+                return
+
+            # 2. Max 2 trades per day
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if today != self._daily_trade_date:
+                self._daily_trade_count = 0
+                self._daily_trade_date = today
+            if self._daily_trade_count >= 2:
+                logger.debug("signal_daily_limit", user_id=self.user_id,
+                            pair=signal.pair, count=self._daily_trade_count)
+                return
+
+            # 3. Minimum confidence 0.6 (only high-conviction signals)
+            if signal.confidence < 0.6:
+                logger.debug("signal_low_confidence", user_id=self.user_id,
+                            pair=signal.pair, confidence=round(signal.confidence, 2))
+                return
+
         # Spot exchange: SELL signal = close existing BUY position
         if signal.direction == Direction.SELL:
             owned = await self.broker.get_open_positions()
@@ -659,6 +688,10 @@ class UserBotContext:
 
         logger.info("order_success", user_id=self.user_id, pair=signal.pair,
                      order_id=result.order_id, price=result.price, fee=result.fee)
+
+        # Update sniper counters
+        self._last_trade_time = _time_mod.time()
+        self._daily_trade_count += 1
 
         latency = _time.monotonic() - t0
         order_latency_histogram.observe(latency)

@@ -16,8 +16,8 @@ class MACDTrendStrategy(AbstractStrategy):
 
     def __init__(
         self,
-        atr_stop_multiplier: float = 1.5,
-        risk_reward_ratio: float = 2.0,
+        atr_stop_multiplier: float = 2.0,
+        risk_reward_ratio: float = 3.0,
     ) -> None:
         self.atr_stop_multiplier = atr_stop_multiplier
         self.risk_reward_ratio = risk_reward_ratio

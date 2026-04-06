@@ -16,10 +16,10 @@ class RSIMeanReversionStrategy(AbstractStrategy):
 
     def __init__(
         self,
-        rsi_oversold: float = 35.0,
-        rsi_overbought: float = 65.0,
-        stop_pct: float = 4.0,
-        limit_pct: float = 5.0,
+        rsi_oversold: float = 28.0,
+        rsi_overbought: float = 72.0,
+        stop_pct: float = 6.0,
+        limit_pct: float = 12.0,
     ) -> None:
         self.rsi_oversold = rsi_oversold
         self.rsi_overbought = rsi_overbought

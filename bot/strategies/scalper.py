@@ -17,11 +17,11 @@ class ScalperStrategy(AbstractStrategy):
     def __init__(
         self,
         bb_squeeze_threshold: float = 0.02,
-        volume_spike_mult: float = 1.5,
-        stop_pct: float = 5.0,
-        limit_pct: float = 8.0,
-        bearish_stop_pct: float = 2.0,
-        bearish_limit_pct: float = 3.0,
+        volume_spike_mult: float = 2.0,
+        stop_pct: float = 8.0,
+        limit_pct: float = 15.0,
+        bearish_stop_pct: float = 4.0,
+        bearish_limit_pct: float = 6.0,
         bearish_rsi_threshold: float = 30.0,
     ) -> None:
         self.bb_squeeze_threshold = bb_squeeze_threshold
