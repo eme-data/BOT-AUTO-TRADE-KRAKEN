@@ -82,6 +82,11 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "autopilot_scan_interval_minutes": {"label": "Scan Interval (min)", "type": "number", "default": 60},
         "autopilot_max_active": {"label": "Max Active Pairs", "type": "number", "default": 3},
         "autopilot_min_score": {"label": "Min Score Threshold", "type": "number", "default": 0.40},
+        "autopilot_allowed_strategies": {
+            "label": "Autopilot allowed strategies (comma-separated)",
+            "type": "text",
+            "default": "funding_divergence",
+        },
     },
     "notifications": {
         "telegram_bot_token": {"label": "Telegram Bot Token", "type": "password", "default": ""},
@@ -180,6 +185,10 @@ class Settings(BaseSettings):
     autopilot_scan_interval_minutes: int = 30
     autopilot_max_active: int = 3
     autopilot_min_score: float = 0.40
+    # Comma-separated whitelist of strategy keys that autopilot may instantiate.
+    # Only strategies listed here will be attached to qualifying pairs. Leave
+    # empty to restore the legacy behaviour (no filter).
+    autopilot_allowed_strategies: str = "funding_divergence"
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -297,6 +306,7 @@ class UserSettings:
         "autopilot_scan_interval_minutes": 30,
         "autopilot_max_active": 3,
         "autopilot_min_score": 0.40,
+        "autopilot_allowed_strategies": "funding_divergence",
         "telegram_bot_token": "",
         "telegram_chat_id": "",
         "discord_webhook_url": "",

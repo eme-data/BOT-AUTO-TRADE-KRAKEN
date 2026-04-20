@@ -48,13 +48,25 @@ class AutopilotManager:
         self.shadow_mode = settings.autopilot_shadow_mode
         self.max_active = settings.autopilot_max_active
         self.min_score = settings.autopilot_min_score
+        self.allowed_strategies: list[str] = self._parse_allowed(
+            getattr(settings, "autopilot_allowed_strategies", "")
+        )
         self._cfg = None  # Set by UserBotContext to override with per-user values
+
+    @staticmethod
+    def _parse_allowed(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(",") if s.strip()]
 
     def apply_user_config(self, cfg) -> None:
         """Override autopilot settings with per-user config."""
         self._cfg = cfg
         self.enabled = bool(getattr(cfg, 'autopilot_enabled', self.enabled))
         self.min_score = float(getattr(cfg, 'autopilot_min_score', self.min_score))
+        self.allowed_strategies = self._parse_allowed(
+            getattr(cfg, 'autopilot_allowed_strategies', None)
+        ) or self.allowed_strategies
 
     async def run_scan_cycle(self) -> list[MarketScore]:
         """Full autopilot cycle: scan → score → activate top N."""
@@ -169,7 +181,16 @@ class AutopilotManager:
             logger.warning("autopilot_publish_error", error=str(exc))
 
     async def _activate(self, score: MarketScore) -> None:
-        strategy_name = select_strategy(score)
+        strategy_name = select_strategy(
+            score, allowed_strategies=self.allowed_strategies or None
+        )
+        if strategy_name is None:
+            logger.info(
+                "autopilot_pair_skipped_no_allowed_strategy",
+                pair=score.pair, regime=score.regime,
+                allowed=self.allowed_strategies,
+            )
+            return
         key = f"ap_{strategy_name}_{score.pair.replace('/', '_')}"
 
         try:
