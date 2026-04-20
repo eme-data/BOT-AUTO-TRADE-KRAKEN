@@ -114,12 +114,13 @@ class BacktestEngine:
                         signal, bar, pair, balance
                     )
 
-            # ── Record equity ──
+            # ── Record equity (cash + mark-to-market position value) ──
             mark = bar["close"]
-            unrealized = 0.0
             if position is not None:
-                unrealized = self._unrealized_pnl(position, mark)
-            equity_curve.append(balance + unrealized)
+                equity = balance + position.size * mark
+            else:
+                equity = balance
+            equity_curve.append(equity)
 
         # Close any remaining position at last bar's close
         if position is not None:
@@ -131,6 +132,9 @@ class BacktestEngine:
                 position, exit_price, last_bar.name, balance
             )
             trades.append(trade)
+            # Overwrite the last equity sample to reflect the realised close
+            if equity_curve:
+                equity_curve[-1] = balance
 
         return self._build_result(trades, equity_curve)
 

@@ -9,6 +9,7 @@ import structlog
 
 from bot.broker.models import Tick
 from bot.strategies.base import AbstractStrategy, Signal
+from bot.strategies.funding_divergence import FundingDivergenceStrategy
 from bot.strategies.macd_trend import MACDTrendStrategy
 from bot.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
 from bot.strategies.scalper import ScalperStrategy
@@ -18,6 +19,7 @@ logger = structlog.get_logger(__name__)
 
 # Built-in strategy classes
 STRATEGY_CLASSES: dict[str, type[AbstractStrategy]] = {
+    "funding_divergence": FundingDivergenceStrategy,
     "macd_trend": MACDTrendStrategy,
     "rsi_mean_reversion": RSIMeanReversionStrategy,
     "scalper": ScalperStrategy,

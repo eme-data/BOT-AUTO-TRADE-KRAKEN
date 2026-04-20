@@ -28,6 +28,7 @@ import structlog
 from bot.backtesting.engine import BacktestEngine
 from bot.backtesting.models import BacktestResult
 from bot.broker.kraken_rest import KrakenRestClient
+from bot.data.funding import FundingRateClient
 from bot.data.indicators import add_all_indicators
 from bot.strategies.registry import STRATEGY_CLASSES
 
@@ -246,8 +247,13 @@ async def run_harness(
             f"Available: {sorted(STRATEGY_CLASSES.keys())}"
         )
 
+    # Strategies that depend on a funding_rate column (fetched from Binance).
+    needs_funding = {"funding_divergence"}
+    fetch_funding = any(s in needs_funding for s in strategies)
+
     # ── Fetch bars for every pair once (cache in memory) ──
     client = KrakenRestClient()
+    funding_client = FundingRateClient() if fetch_funding else None
     pair_bars: dict[str, pd.DataFrame] = {}
     try:
         await client.connect()
@@ -258,12 +264,43 @@ async def run_harness(
                 if df.empty:
                     logger.warning("harness_no_data", pair=pair)
                     continue
-                pair_bars[pair] = add_all_indicators(df)
+                df_ind = add_all_indicators(df)
+
+                # Merge funding rates (forward-filled to bar frequency) when any
+                # strategy needs them. Binance publishes funding every 8h.
+                if funding_client is not None:
+                    try:
+                        samples = await funding_client.get_history(pair, days=days)
+                        fdf = FundingRateClient.samples_to_df(samples)
+                        if not fdf.empty:
+                            # Align to bar timestamps; forward-fill between 8h points
+                            fdf = fdf.reindex(
+                                df_ind.index.union(fdf.index)
+                            ).sort_index().ffill()
+                            fdf = fdf.reindex(df_ind.index)
+                            df_ind["funding_rate"] = fdf["funding_rate"]
+                            logger.info(
+                                "harness_funding_merged",
+                                pair=pair, funding_rows=len(samples),
+                            )
+                        else:
+                            logger.warning(
+                                "harness_funding_missing", pair=pair,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "harness_funding_error",
+                            pair=pair, error=str(exc),
+                        )
+
+                pair_bars[pair] = df_ind
                 logger.info("harness_fetch_done", pair=pair, bars=len(df))
             except Exception as exc:
                 logger.error("harness_fetch_error", pair=pair, error=str(exc))
     finally:
         await client.disconnect()
+        if funding_client is not None:
+            await funding_client.close()
 
     # ── Run every (strategy, pair) combo ──
     runs: list[HarnessRun] = []
