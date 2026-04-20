@@ -44,12 +44,16 @@ class BacktestEngine:
         maker_fee: float = 0.0016,
         taker_fee: float = 0.0026,
         slippage: float = 0.0005,
+        position_size_pct: float = 0.15,
     ) -> None:
         self.strategy = strategy
         self.initial_balance = initial_balance
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
         self.slippage = slippage
+        # Fraction of equity risked per trade — must mirror production sizing
+        # (`risk_max_position_pct` in user config, default 0.15).
+        self.position_size_pct = position_size_pct
 
     # ── public ──────────────────────────────────────────
 
@@ -149,13 +153,20 @@ class BacktestEngine:
 
     def _open_position(self, signal, bar, pair, balance):
         """Open a new position, deducting entry fee from balance."""
+        # Guard against depleted balance — avoid compounding into negative equity.
+        if balance <= 0:
+            return None, balance
+
         entry_price = self._apply_slippage(
             bar["close"], signal.direction.value, closing=False
         )
         # Use taker fee for market entries
         fee_rate = self.taker_fee
-        # Size: invest full balance (minus fees) into the position
-        size = balance / (entry_price * (1 + fee_rate))
+        # Size: fraction of current equity (mirrors production sizing).
+        notional = balance * self.position_size_pct
+        if notional <= 0 or entry_price <= 0:
+            return None, balance
+        size = notional / (entry_price * (1 + fee_rate))
         entry_fee = size * entry_price * fee_rate
 
         # Compute stop/take-profit price levels

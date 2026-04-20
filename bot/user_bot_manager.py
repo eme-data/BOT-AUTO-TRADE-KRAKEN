@@ -102,6 +102,10 @@ class UserBotContext:
         self._last_trade_time: float = 0.0  # global cooldown between any trade
         self._daily_trade_count: int = 0
         self._daily_trade_date: str = ""
+        # Macro regime filter cache (BTC daily EMA200). Refreshed at most every 30 min.
+        self._regime_cache_ts: float = 0.0
+        self._regime_is_bearish: bool = False
+        self._regime_cache_ttl_sec: float = 1800.0
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -611,6 +615,48 @@ class UserBotContext:
                     _fg_size_factor = 1.0
             except Exception:
                 pass
+
+        # Macro regime filter: block ALL buys when BTC is below its daily EMA200.
+        # A sub-EMA200 BTC marks a structurally bearish regime where long-only
+        # strategies have negative expectancy. Cached for `_regime_cache_ttl_sec`
+        # to avoid hammering the data feed on every signal.
+        if signal.direction == Direction.BUY:
+            try:
+                now_ts = _time_mod.time()
+                if now_ts - self._regime_cache_ts > self._regime_cache_ttl_sec:
+                    quote = signal.pair.split("/")[1] if "/" in signal.pair else "USD"
+                    btc_daily = await self.data_mgr.get_bars(
+                        f"BTC/{quote}", interval_minutes=1440, count=250
+                    )
+                    if not btc_daily.empty and len(btc_daily) >= 200:
+                        from bot.data.indicators import add_all_indicators
+                        btc_daily = add_all_indicators(btc_daily)
+                        btc_close = btc_daily["close"].iloc[-1]
+                        btc_ema200 = (
+                            btc_daily["ema_200"].iloc[-1]
+                            if "ema_200" in btc_daily.columns else None
+                        )
+                        if btc_ema200 and not pd.isna(btc_ema200):
+                            self._regime_is_bearish = btc_close < btc_ema200
+                            self._regime_cache_ts = now_ts
+                            logger.info(
+                                "regime_refreshed", user_id=self.user_id,
+                                btc_close=round(float(btc_close), 2),
+                                btc_ema200=round(float(btc_ema200), 2),
+                                bearish=self._regime_is_bearish,
+                            )
+                if self._regime_is_bearish:
+                    logger.info(
+                        "signal_blocked_macro_bear",
+                        user_id=self.user_id, pair=signal.pair,
+                    )
+                    orders_rejected_counter.labels(reason="macro_bear_regime").inc()
+                    return
+            except Exception as exc:
+                logger.warning(
+                    "regime_filter_error",
+                    user_id=self.user_id, pair=signal.pair, error=str(exc),
+                )
 
         # BTC trend gate: reduce size for altcoins if BTC is in strong downtrend
         # Only block if BTC is >5% below EMA50 (crash territory), otherwise just reduce size

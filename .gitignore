@@ -33,6 +33,9 @@ Thumbs.db
 *.log
 logs/
 
+# Runtime artifacts (backtest reports etc.)
+data/
+
 # Database
 *.db
 *.sqlite3
