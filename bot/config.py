@@ -70,6 +70,11 @@ SETTINGS_SCHEMA: dict[str, dict[str, dict[str, Any]]] = {
         "risk_stop_loss_pct": {"label": "Stop Loss (%)", "type": "number", "default": 0.03},
         "risk_max_position_pct": {"label": "Max Position Size (%)", "type": "number", "default": 0.15},
         "risk_max_open_trades": {"label": "Max Open Trades", "type": "number", "default": 4},
+        "use_post_only_orders": {"label": "Post-only limit orders (saves ~0.15% per leg)", "type": "toggle", "default": True},
+        "post_only_max_wait_sec": {"label": "Post-only fill timeout (seconds)", "type": "number", "default": 60},
+        "strategy_autodisable_enabled": {"label": "Auto-disable losing strategies (30d)", "type": "toggle", "default": True},
+        "strategy_autodisable_min_trades": {"label": "Auto-disable: min closed trades (30d)", "type": "number", "default": 10},
+        "strategy_autodisable_lookback_days": {"label": "Auto-disable: lookback window (days)", "type": "number", "default": 30},
     },
     "autopilot": {
         "autopilot_enabled": {"label": "Enabled", "type": "toggle", "default": True},
@@ -164,6 +169,11 @@ class Settings(BaseSettings):
     risk_stop_loss_pct: float = 0.03
     risk_max_position_pct: float = 0.15
     risk_max_open_trades: int = 4
+    use_post_only_orders: bool = True
+    post_only_max_wait_sec: int = 60
+    strategy_autodisable_enabled: bool = True
+    strategy_autodisable_min_trades: int = 10
+    strategy_autodisable_lookback_days: int = 30
 
     autopilot_enabled: bool = True
     autopilot_shadow_mode: bool = True
@@ -277,6 +287,11 @@ class UserSettings:
         "risk_stop_loss_pct": 0.03,
         "risk_max_position_pct": 0.15,
         "risk_max_open_trades": 4,
+        "use_post_only_orders": True,
+        "post_only_max_wait_sec": 60,
+        "strategy_autodisable_enabled": True,
+        "strategy_autodisable_min_trades": 10,
+        "strategy_autodisable_lookback_days": 30,
         "autopilot_enabled": True,
         "autopilot_shadow_mode": True,
         "autopilot_scan_interval_minutes": 30,

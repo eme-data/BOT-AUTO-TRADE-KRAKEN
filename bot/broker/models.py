@@ -65,6 +65,12 @@ class OrderRequest:
     price: float | None = None
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
+    # Post-only limit orders pay the maker fee (Kraken tier-0: 0.25% vs 0.40%
+    # taker), but may fail to fill if the book moves. Used by
+    # `AbstractBroker.open_position_post_only`.
+    post_only: bool = False
+    limit_price: float | None = None  # explicit price for post-only limit
+    max_wait_sec: float | None = None  # cancel if unfilled within this window
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

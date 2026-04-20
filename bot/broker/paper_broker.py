@@ -6,12 +6,17 @@ with simulated fills, fee tracking, and virtual balance management.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 
 import structlog
 
-from bot.broker.base import AbstractBroker
+from bot.broker.base import (
+    AbstractBroker,
+    PostOnlyRejectedError,
+    PostOnlyTimeoutError,
+)
 from bot.broker.kraken_rest import KrakenRestClient
 from bot.broker.models import (
     AccountBalance,
@@ -176,6 +181,81 @@ class PaperBroker(AbstractBroker):
             status=OrderStatus.OPEN,
             fee=fee,
             raw={"paper": True, "slippage_applied": True},
+        )
+
+    async def open_position_post_only(self, order: OrderRequest) -> OrderResult:
+        """Simulate a maker-only limit order against the live mid-price.
+
+        Models real Kraken behaviour approximately: if our limit price is at
+        or better than the touch on the favourable side we assume a fill at
+        the limit price using the maker fee; otherwise we wait briefly to
+        mimic queue position and then time out so the strategy treats the
+        signal as missed (safer than over-promising fills in paper).
+        """
+        if order.limit_price is None or order.limit_price <= 0:
+            raise ValueError("post_only requires order.limit_price > 0")
+
+        tick = await self.get_ticker(order.pair)
+        ref_bid = tick.bid or tick.last
+        ref_ask = tick.ask or tick.last
+
+        # Determine whether the limit would be a maker order:
+        # buys must sit at or below the bid, sells at or above the ask.
+        if order.direction == Direction.BUY:
+            would_cross = order.limit_price > ref_bid
+        else:
+            would_cross = order.limit_price < ref_ask
+        if would_cross:
+            raise PostOnlyRejectedError(
+                f"limit {order.limit_price} would cross the book "
+                f"(bid={ref_bid}, ask={ref_ask})"
+            )
+
+        # Simulate queue: 70% probability of fill within max_wait_sec, otherwise
+        # time out. Deterministic per-call via a small hash to keep tests stable.
+        wait_sec = float(order.max_wait_sec) if order.max_wait_sec else 60.0
+        seed = hash((order.pair, order.size, order.limit_price)) & 0xFFFF
+        fills = (seed % 10) < 7
+        if not fills:
+            await asyncio.sleep(min(wait_sec, 1.0))
+            raise PostOnlyTimeoutError(
+                f"paper post-only timed out for {order.pair}"
+            )
+
+        fill_price = order.limit_price
+        notional = fill_price * order.size
+        fee = notional * self._maker_fee
+        if notional + fee > self._balance:
+            raise RuntimeError(
+                f"Paper broker: insufficient balance. Need {notional + fee:.2f}, "
+                f"have {self._balance:.2f}"
+            )
+        self._balance -= notional + fee
+        self._total_fees_paid += fee
+        order_id = self._next_order_id()
+        position = Position(
+            pair=order.pair, direction=order.direction,
+            size=order.size, entry_price=fill_price,
+            current_price=fill_price, unrealized_pnl=0.0,
+            stop_loss=None, take_profit=None,
+            opened_at=datetime.now(timezone.utc),
+            order_id=order_id,
+            metadata={"status": "PAPER", "post_only": True},
+        )
+        self._positions[order_id] = position
+        logger.info(
+            "paper_post_only_filled",
+            order_id=order_id, pair=order.pair,
+            direction=order.direction.value, size=order.size,
+            fill_price=fill_price, fee=fee,
+            remaining_balance=self._balance,
+        )
+        return OrderResult(
+            order_id=order_id, pair=order.pair,
+            direction=order.direction, size=order.size,
+            price=fill_price, status=OrderStatus.OPEN,
+            fee=fee,
+            raw={"paper": True, "post_only": True, "maker_fee": True},
         )
 
     async def close_position(

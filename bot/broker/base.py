@@ -14,6 +14,14 @@ from bot.broker.models import (
 )
 
 
+class PostOnlyRejectedError(Exception):
+    """Raised when an exchange rejects a post-only order (would have crossed)."""
+
+
+class PostOnlyTimeoutError(Exception):
+    """Raised when a post-only order is not filled within ``max_wait_sec``."""
+
+
 class AbstractBroker(ABC):
     """Interface that all broker implementations must follow."""
 
@@ -38,6 +46,18 @@ class AbstractBroker(ABC):
     @abstractmethod
     async def open_position(self, order: OrderRequest) -> OrderResult:
         """Submit a new order."""
+
+    async def open_position_post_only(self, order: OrderRequest) -> OrderResult:
+        """Submit a maker-only limit order at the requested ``limit_price``.
+
+        Implementations must raise ``PostOnlyRejectedError`` when the exchange
+        rejects the order for crossing the book, and ``PostOnlyTimeoutError``
+        when the order is not filled within ``order.max_wait_sec``.
+
+        The default implementation falls back to a regular taker market order
+        so brokers that don't support post-only continue to work.
+        """
+        return await self.open_position(order)
 
     @abstractmethod
     async def close_position(self, order_id: str, pair: str, size: float) -> OrderResult:

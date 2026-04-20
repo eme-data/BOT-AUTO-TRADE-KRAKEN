@@ -96,7 +96,12 @@ class UserBotContext:
             "dca": 0.0,
             "sync_positions": 0.0,
             "funding_refresh": 0.0,
+            "strategy_health": 0.0,
         }
+        # Strategies that the auto-disable loop has unregistered this run.
+        # Persists across reload_settings so a losing strategy stays off until
+        # the user restarts the bot (intentional: forces a conscious decision).
+        self._autodisabled_strategies: set[str] = set()
         self._last_tick_at: float = 0.0
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
         self._signal_lock = asyncio.Lock()  # prevent concurrent signal processing
@@ -351,9 +356,10 @@ class UserBotContext:
             self._dca_loop(),
             self._sync_positions_loop(),
             self._funding_refresh_loop(),
+            self._strategy_health_loop(),
             return_exceptions=True,
         )
-        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca", "sync_positions", "funding_refresh"]
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca", "sync_positions", "funding_refresh", "strategy_health"]
         for name, result in zip(task_names, results):
             if isinstance(result, Exception):
                 logger.error("user_task_crashed", user_id=self.user_id, task=name, error=str(result))
@@ -711,14 +717,19 @@ class UserBotContext:
                         order_value=round(order_value, 2), ticker_last=ticker.last)
             return
 
-        # Minimum profitability check: expected gain must cover 3x estimated fees
-        est_fee = order_value * 0.004  # 0.4% taker fee each way
+        # Minimum profitability check: expected gain must cover 3x estimated fees.
+        # Use the maker fee when we will route via post-only, taker otherwise.
+        _fee_calc = self.risk_manager.fee_calculator
+        _will_be_maker = bool(getattr(self.cfg, "use_post_only_orders", True))
+        _per_leg_fee_rate = _fee_calc.maker_fee if _will_be_maker else _fee_calc.taker_fee
+        est_fee = order_value * _per_leg_fee_rate
         tp_pct = (signal.take_profit_pct or 5.0) / 100.0
         expected_gain = order_value * tp_pct
         if expected_gain < est_fee * 3:
             logger.info("order_skipped_unprofitable", user_id=self.user_id, pair=signal.pair,
                         order_value=round(order_value, 2), expected_gain=round(expected_gain, 4),
-                        est_fees=round(est_fee * 2, 4))
+                        est_fees=round(est_fee * 2, 4),
+                        fee_rate=_per_leg_fee_rate)
             return
 
         size = order_value / ticker.last
@@ -757,9 +768,37 @@ class UserBotContext:
             stop_loss_pct=signal.stop_loss_pct, take_profit_pct=signal.take_profit_pct,
             metadata=signal.metadata,
         )
+        # Choose post-only limit (maker fee 0.25%) vs market (taker fee 0.40%).
+        # On Kraken tier 0 the saving is ~0.15% per leg = 0.30% round-trip,
+        # which roughly matches the bot's per-trade slippage budget.
+        use_post_only = bool(getattr(self.cfg, "use_post_only_orders", True))
+        if use_post_only:
+            wait_sec = float(getattr(self.cfg, "post_only_max_wait_sec", 60))
+            order.post_only = True
+            order.max_wait_sec = wait_sec
+            # Place at bid for buys / ask for sells so the order is guaranteed
+            # to sit in the book and earn the maker rebate.
+            if signal.direction == Direction.BUY:
+                order.limit_price = ticker.bid if ticker.bid > 0 else ticker.last
+            else:
+                order.limit_price = ticker.ask if ticker.ask > 0 else ticker.last
         t0 = _time.monotonic()
         try:
-            result = await self.broker.open_position(order)
+            from bot.broker.base import PostOnlyRejectedError, PostOnlyTimeoutError
+            if use_post_only:
+                result = await self.broker.open_position_post_only(order)
+            else:
+                result = await self.broker.open_position(order)
+        except PostOnlyRejectedError as exc:
+            logger.info("post_only_rejected_skip", user_id=self.user_id,
+                        pair=signal.pair, reason=str(exc))
+            orders_rejected_counter.labels(reason="post_only_rejected").inc()
+            return
+        except PostOnlyTimeoutError as exc:
+            logger.info("post_only_timeout_skip", user_id=self.user_id,
+                        pair=signal.pair, reason=str(exc))
+            orders_rejected_counter.labels(reason="post_only_timeout").inc()
+            return
         except Exception as exc:
             logger.error("order_error", user_id=self.user_id, pair=signal.pair,
                          error=str(exc), error_type=type(exc).__name__)
@@ -801,9 +840,14 @@ class UserBotContext:
                 fill_price = ticker.last
 
         trade_status = "PAPER" if self.cfg.bot_paper_trading else None
-        # Round-trip taker fees must be added to TP so the user actually nets the claimed %
-        _taker = self.risk_manager.fee_calculator.taker_fee
-        _tp_fee_buffer = 2 * _taker * 100  # in % points (0.8pp at tier 0)
+        # Round-trip fee buffer added to TP so the user nets the claimed %.
+        # Use maker fee if we routed post-only, taker otherwise.
+        _fee_buf_rate = (
+            self.risk_manager.fee_calculator.maker_fee
+            if use_post_only
+            else self.risk_manager.fee_calculator.taker_fee
+        )
+        _tp_fee_buffer = 2 * _fee_buf_rate * 100  # in % points
         try:
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
@@ -1278,6 +1322,85 @@ class UserBotContext:
             "funding_cache_refreshed",
             user_id=self.user_id, pair=pair, samples=len(samples),
         )
+
+    # ── Strategy auto-disable (rolling 30d P&L safety net) ──────────────
+
+    async def _strategy_health_loop(self) -> None:
+        """Periodically check rolling P&L per strategy and unregister losers.
+
+        A strategy is auto-disabled when, over the configured lookback (default
+        30 days), it has at least ``strategy_autodisable_min_trades`` CLOSED
+        trades AND net realised profit (excluding fees, since ``profit`` is
+        already net of fees in close_trade) is negative. Once disabled for
+        this run, the strategy stays off until the bot is restarted.
+        """
+        from bot.db.repository import TradeRepository
+
+        while self._running:
+            await asyncio.sleep(3600)  # check once per hour
+            self._last_loop_run["strategy_health"] = _time_mod.time()
+            if not bool(getattr(self.cfg, "strategy_autodisable_enabled", True)):
+                continue
+
+            min_trades = int(getattr(self.cfg, "strategy_autodisable_min_trades", 10))
+            lookback_days = int(getattr(self.cfg, "strategy_autodisable_lookback_days", 30))
+            since = datetime.now(timezone.utc) - _dt.timedelta(days=lookback_days)
+
+            try:
+                async with get_session() as session:
+                    repo = TradeRepository(session, user_id=self.user_id)
+                    trades = await repo.get_trades_since(since)
+            except Exception as exc:
+                logger.warning(
+                    "strategy_health_db_error",
+                    user_id=self.user_id, error=str(exc),
+                )
+                continue
+
+            # Group closed trades by strategy → (count, sum_profit)
+            stats: dict[str, list[float]] = {}
+            for t in trades:
+                if t.status != "CLOSED" or t.profit is None or not t.strategy:
+                    continue
+                stats.setdefault(t.strategy, []).append(float(t.profit))
+
+            active = set(self.strategy_registry.strategies.keys())
+            for strategy, pnls in stats.items():
+                if strategy in self._autodisabled_strategies:
+                    continue
+                if strategy not in active:
+                    continue
+                count = len(pnls)
+                total = sum(pnls)
+                if count < min_trades:
+                    continue
+                if total >= 0:
+                    continue
+                # Kill switch: unregister from live dispatcher
+                self.strategy_registry.unregister(strategy)
+                self._autodisabled_strategies.add(strategy)
+                logger.error(
+                    "strategy_autodisabled",
+                    user_id=self.user_id, strategy=strategy,
+                    lookback_days=lookback_days,
+                    trades=count, net_pnl=round(total, 4),
+                )
+                await self.publish_log(
+                    "ERROR", "strategy_autodisabled",
+                    strategy=strategy, lookback_days=lookback_days,
+                    trades=count, net_pnl=round(total, 4),
+                )
+                try:
+                    from bot.notifications_push import send_push_to_user
+                    asyncio.ensure_future(send_push_to_user(
+                        self.user_id,
+                        f"Stratégie {strategy} désactivée",
+                        f"P&L 30j négatif ({total:+.2f} sur {count} trades) — "
+                        "redémarrage du bot requis pour réactiver.",
+                        tag=f"autodisable-{strategy}",
+                    ))
+                except Exception:
+                    pass
 
     async def _funding_refresh_loop(self) -> None:
         """Periodically refresh funding cache for every active pair."""

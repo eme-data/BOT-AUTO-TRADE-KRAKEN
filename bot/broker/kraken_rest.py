@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
@@ -10,7 +11,11 @@ from typing import Any
 import ccxt.async_support as ccxt
 import structlog
 
-from bot.broker.base import AbstractBroker
+from bot.broker.base import (
+    AbstractBroker,
+    PostOnlyRejectedError,
+    PostOnlyTimeoutError,
+)
 from bot.broker.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from bot.broker.rate_limiter import KrakenRateLimiter
 from bot.broker.models import (
@@ -237,6 +242,95 @@ class KrakenRestClient(AbstractBroker):
             status=OrderStatus.OPEN,
             fee=fee,
             raw=result,
+        )
+
+    async def open_position_post_only(self, order: OrderRequest) -> OrderResult:
+        """Place a maker-only limit order, polling until filled or cancelled.
+
+        Saves the spread between Kraken's taker (0.40% tier 0) and maker
+        (0.25% tier 0) fees. Raises PostOnlyRejectedError if the exchange
+        refused the order, or PostOnlyTimeoutError if it didn't fill within
+        ``order.max_wait_sec`` (default 60s).
+        """
+        if order.limit_price is None or order.limit_price <= 0:
+            raise ValueError("post_only requires order.limit_price > 0")
+
+        side = order.direction.value
+        wait_sec = float(order.max_wait_sec) if order.max_wait_sec else 60.0
+
+        # Place the order. Kraken / ccxt exposes post-only as `postOnly: True`.
+        try:
+            placed = await self.exchange.create_order(
+                symbol=order.pair,
+                type="limit",
+                side=side,
+                amount=order.size,
+                price=order.limit_price,
+                params={"postOnly": True},
+            )
+        except Exception as exc:
+            # Most ccxt errors here mean the exchange rejected the order
+            # because it would have crossed (i.e. matched immediately).
+            msg = str(exc).lower()
+            if "post" in msg and ("only" in msg or "reject" in msg):
+                raise PostOnlyRejectedError(str(exc)) from exc
+            raise
+
+        order_id = placed["id"]
+        logger.info(
+            "post_only_submitted",
+            pair=order.pair, side=side, price=order.limit_price,
+            size=order.size, order_id=order_id, max_wait_sec=wait_sec,
+        )
+
+        deadline = _time.monotonic() + wait_sec
+        last_status: dict[str, Any] | None = None
+        poll_interval = 2.0
+        while _time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            try:
+                last_status = await self.exchange.fetch_order(order_id, order.pair)
+            except Exception as exc:
+                logger.warning(
+                    "post_only_poll_error",
+                    pair=order.pair, order_id=order_id, error=str(exc),
+                )
+                continue
+            status_value = (last_status.get("status") or "").lower()
+            if status_value in ("closed", "filled"):
+                fill_price = float(
+                    last_status.get("average") or last_status.get("price") or order.limit_price
+                )
+                fee_info = last_status.get("fee") or {}
+                fee = float(fee_info.get("cost", 0)) if isinstance(fee_info, dict) else 0.0
+                logger.info(
+                    "post_only_filled",
+                    pair=order.pair, order_id=order_id,
+                    fill_price=fill_price, fee=fee,
+                )
+                return OrderResult(
+                    order_id=order_id, pair=order.pair,
+                    direction=order.direction, size=order.size,
+                    price=fill_price, status=OrderStatus.OPEN,
+                    fee=fee, raw=last_status,
+                )
+            if status_value in ("canceled", "cancelled", "rejected", "expired"):
+                raise PostOnlyRejectedError(
+                    f"order {order_id} ended in status {status_value}"
+                )
+
+        # Timed out — try to cancel before bailing out.
+        try:
+            await self.exchange.cancel_order(order_id, order.pair)
+            logger.info("post_only_canceled_timeout",
+                        pair=order.pair, order_id=order_id)
+        except Exception as exc:
+            logger.warning(
+                "post_only_cancel_error",
+                pair=order.pair, order_id=order_id, error=str(exc),
+            )
+        raise PostOnlyTimeoutError(
+            f"order {order_id} not filled within {wait_sec:.0f}s"
         )
 
     @_auto_retry()
