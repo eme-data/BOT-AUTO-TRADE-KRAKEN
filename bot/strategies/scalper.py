@@ -74,9 +74,12 @@ class ScalperStrategy(AbstractStrategy):
         if is_oversold and in_uptrend and signal is None:
             signal = self._rsi_bounce(pair, df, cur, prev, close, rsi)
 
-        # --- Signal 6: Bearish scalp — extreme oversold bounce in any market ---
-        if signal is None and rsi is not None and not pd.isna(rsi):
-            signal = self._bearish_scalp(pair, df, cur, prev, close, rsi)
+        # --- Signal 6: Bearish scalp — DISABLED ---
+        # Counter-trend RSI bounces with 4%/6% stops require a ~42% win-rate after
+        # Kraken taker fees (0.4% × 2) + spread, unreachable empirically in bear
+        # regimes. Re-enable only after backtest validates Sharpe > 1.
+        # if signal is None and rsi is not None and not pd.isna(rsi):
+        #     signal = self._bearish_scalp(pair, df, cur, prev, close, rsi)
 
         return signal
 

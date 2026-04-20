@@ -565,6 +565,27 @@ class UserBotContext:
 
         ticker = await self.broker.get_ticker(signal.pair)
 
+        # Spread filter: reject if bid/ask spread would eat into the TP.
+        # Threshold: spread must be <= 25% of the take-profit target. Below that,
+        # slippage + round-trip fees leave the trade with negative expectancy on
+        # small Kraken alt pairs.
+        try:
+            if ticker.bid > 0 and ticker.ask > 0:
+                mid = (ticker.bid + ticker.ask) / 2
+                spread_pct = (ticker.ask - ticker.bid) / mid * 100 if mid > 0 else 0
+                tp_pct = signal.take_profit_pct or 5.0
+                if spread_pct > tp_pct * 0.25:
+                    logger.info(
+                        "signal_rejected_wide_spread",
+                        user_id=self.user_id, pair=signal.pair,
+                        spread_pct=round(spread_pct, 3), tp_pct=tp_pct,
+                    )
+                    orders_rejected_counter.labels(reason="wide_spread").inc()
+                    return
+        except Exception as exc:
+            logger.warning("spread_check_error", user_id=self.user_id,
+                           pair=signal.pair, error=str(exc))
+
         # Sentiment-based position sizing: adapt size to Fear & Greed level
         # Never block trades entirely — instead reduce position size in fearful markets
         is_bearish_scalp = signal.metadata.get("bearish_mode") if signal.metadata else False
@@ -720,6 +741,9 @@ class UserBotContext:
                 fill_price = ticker.last
 
         trade_status = "PAPER" if self.cfg.bot_paper_trading else None
+        # Round-trip taker fees must be added to TP so the user actually nets the claimed %
+        _taker = self.risk_manager.fee_calculator.taker_fee
+        _tp_fee_buffer = 2 * _taker * 100  # in % points (0.8pp at tier 0)
         try:
             async with get_session() as session:
                 repo = TradeRepository(session, user_id=self.user_id)
@@ -728,7 +752,10 @@ class UserBotContext:
                     direction=signal.direction.value, size=size,
                     entry_price=fill_price,
                     stop_loss=(fill_price * (1 - signal.stop_loss_pct / 100) if signal.stop_loss_pct else None),
-                    take_profit=(fill_price * (1 + signal.take_profit_pct / 100) if signal.take_profit_pct else None),
+                    take_profit=(
+                        fill_price * (1 + (signal.take_profit_pct + _tp_fee_buffer) / 100)
+                        if signal.take_profit_pct else None
+                    ),
                     fee=fill_fee, strategy=signal.strategy_name,
                     metadata_=_sanitize_metadata(signal.metadata),
                     **({"status": trade_status} if trade_status else {}),

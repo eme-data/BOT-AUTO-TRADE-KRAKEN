@@ -98,6 +98,9 @@ class StrategyRegistry:
         """Load default strategies — sniper mode (quality over quantity)."""
         self.register("macd_trend", MACDTrendStrategy())
         self.register("rsi_mean_reversion", RSIMeanReversionStrategy())
-        self.register("scalper", ScalperStrategy())
+        # scalper disabled: tight stops + Kraken tier-0 taker fees (0.4%) make the
+        # required win-rate unreachable at small capital. Re-enable only after a
+        # backtest proves Sharpe > 1 and profit-factor > 1.3.
+        # self.register("scalper", ScalperStrategy())
         # trend_follower disabled: 5% win rate, generates too many losing trades
         # self.register("trend_follower", TrendFollowerStrategy())

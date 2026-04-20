@@ -107,11 +107,13 @@ class ClaudeAnalyzer:
             latency_ms = int((time.monotonic() - t0) * 1000)
         except Exception as exc:
             logger.error("ai_call_error", error=str(exc))
-            # On error, default to APPROVE (don't block trading)
+            # Safety-first: if the AI filter is supposed to run and it fails, REJECT.
+            # If the user doesn't want AI validation, they can disable it in settings
+            # (`ai_pre_trade_enabled=False`), which short-circuits before this call.
             return AIAnalysisResult(
-                verdict=AIVerdict.APPROVE,
+                verdict=AIVerdict.REJECT,
                 confidence=0.0,
-                reasoning=f"AI analysis error: {exc}",
+                reasoning=f"AI analysis error (fail-closed): {exc}",
             )
 
         # Parse response

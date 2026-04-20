@@ -313,6 +313,20 @@ class TradingBot:
 
         # Calculate position size
         ticker = await self.broker.get_ticker(signal.pair)
+
+        # Spread filter: reject if bid/ask spread would eat into the TP
+        if ticker.bid > 0 and ticker.ask > 0:
+            mid = (ticker.bid + ticker.ask) / 2
+            spread_pct = (ticker.ask - ticker.bid) / mid * 100 if mid > 0 else 0
+            tp_pct = signal.take_profit_pct or 5.0
+            if spread_pct > tp_pct * 0.25:
+                logger.info(
+                    "signal_rejected_wide_spread", pair=signal.pair,
+                    spread_pct=round(spread_pct, 3), tp_pct=tp_pct,
+                )
+                orders_rejected_counter.labels(reason="wide_spread").inc()
+                return
+
         size = self.risk_manager.calculate_position_size(
             signal, balance, ticker.last
         )
@@ -373,7 +387,7 @@ class TradingBot:
                     else None
                 ),
                 take_profit=(
-                    result.price * (1 + signal.take_profit_pct / 100)
+                    result.price * (1 + (signal.take_profit_pct + 2 * self.risk_manager.fee_calculator.taker_fee * 100) / 100)
                     if signal.take_profit_pct
                     else None
                 ),
