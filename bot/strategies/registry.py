@@ -97,12 +97,19 @@ class StrategyRegistry:
         return signals
 
     def load_defaults(self) -> None:
-        """Load default strategies — sniper mode (quality over quantity)."""
-        self.register("macd_trend", MACDTrendStrategy())
-        self.register("rsi_mean_reversion", RSIMeanReversionStrategy())
-        # scalper disabled: tight stops + Kraken tier-0 taker fees (0.4%) make the
-        # required win-rate unreachable at small capital. Re-enable only after a
-        # backtest proves Sharpe > 1 and profit-factor > 1.3.
-        # self.register("scalper", ScalperStrategy())
-        # trend_follower disabled: 5% win rate, generates too many losing trades
-        # self.register("trend_follower", TrendFollowerStrategy())
+        """Load default strategies — sniper mode (quality over quantity).
+
+        Only ``funding_divergence`` is enabled by default: it is the single
+        strategy with positive expectancy on the latest backtest harness run
+        (10/10 Kraken pairs net positive, ~70% win-rate, max drawdown < 2%).
+        The legacy indicator-only strategies are kept registered in the
+        STRATEGY_CLASSES catalogue for backtesting, but not loaded into the
+        live dispatcher. Re-enable any of them only after they pass the
+        harness thresholds (Sharpe > 1, PF > 1.3, DD < 20%, trades >= 20).
+        """
+        self.register("funding_divergence", FundingDivergenceStrategy())
+        # Disabled — see harness verdict in commit f12070f:
+        # self.register("macd_trend", MACDTrendStrategy())            # -5.6% avg
+        # self.register("rsi_mean_reversion", RSIMeanReversionStrategy())  # too rare
+        # self.register("scalper", ScalperStrategy())                 # -5.6% avg
+        # self.register("trend_follower", TrendFollowerStrategy())    # -5.9% avg

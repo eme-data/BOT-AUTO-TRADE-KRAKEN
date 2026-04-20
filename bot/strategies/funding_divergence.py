@@ -70,13 +70,19 @@ class FundingDivergenceStrategy(AbstractStrategy):
         if current_funding >= self.abs_threshold:
             return None
 
-        # Compute percentile over the lookback window
-        lookback = df["funding_rate"].dropna().tail(self.lookback_bars)
-        if len(lookback) < max(30, self.min_bars // 2):
-            return None
-        threshold = lookback.quantile(self.percentile)
-        if pd.isna(threshold):
-            return None
+        # Threshold: prefer a pre-computed `funding_pct_threshold` column
+        # (production runtime injects it from a cache extending beyond the
+        # price-bar window). Fall back to in-df rolling percentile for
+        # backtests where the harness merges full funding history into the df.
+        threshold = cur.get("funding_pct_threshold")
+        if threshold is None or pd.isna(threshold):
+            lookback = df["funding_rate"].dropna().tail(self.lookback_bars)
+            if len(lookback) < max(30, self.min_bars // 2):
+                return None
+            threshold = lookback.quantile(self.percentile)
+            if pd.isna(threshold):
+                return None
+        threshold = float(threshold)
         if current_funding > threshold:
             return None  # not extreme enough vs recent history
 

@@ -95,6 +95,7 @@ class UserBotContext:
             "price_alerts": 0.0,
             "dca": 0.0,
             "sync_positions": 0.0,
+            "funding_refresh": 0.0,
         }
         self._last_tick_at: float = 0.0
         self._cooldowns: dict[str, float] = {}  # pair -> last close timestamp
@@ -106,6 +107,15 @@ class UserBotContext:
         self._regime_cache_ts: float = 0.0
         self._regime_is_bearish: bool = False
         self._regime_cache_ttl_sec: float = 1800.0
+        # Funding-rate cache for FundingDivergenceStrategy.
+        # _funding_history[pair] -> sorted DataFrame indexed by timestamp with
+        # column "funding_rate". Refreshed every _funding_refresh_ttl_sec.
+        self._funding_history: dict[str, pd.DataFrame] = {}
+        self._funding_last_refresh: dict[str, float] = {}
+        self._funding_refresh_ttl_sec: float = 1800.0  # 30 min
+        self._funding_history_days: int = 60
+        self._funding_percentile: float = 0.20
+        self._funding_client = None  # lazily instantiated in the refresh loop
 
         # Broker
         if self.cfg.bot_paper_trading:
@@ -340,9 +350,10 @@ class UserBotContext:
             self._price_alert_loop(),
             self._dca_loop(),
             self._sync_positions_loop(),
+            self._funding_refresh_loop(),
             return_exceptions=True,
         )
-        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca", "sync_positions"]
+        task_names = ["bar_update", "account_metrics", "autopilot", "redis_listener", "price_alerts", "dca", "sync_positions", "funding_refresh"]
         for name, result in zip(task_names, results):
             if isinstance(result, Exception):
                 logger.error("user_task_crashed", user_id=self.user_id, task=name, error=str(result))
@@ -354,6 +365,9 @@ class UserBotContext:
         await self.ai_analyzer.close()
         if self.polymarket_client:
             await self.polymarket_client.close()
+        if self._funding_client is not None:
+            await self._funding_client.close()
+            self._funding_client = None
         logger.info("user_bot_stopped", user_id=self.user_id)
 
     # ── Reload settings ────────────────────────────────
@@ -1232,6 +1246,101 @@ class UserBotContext:
         except Exception as exc:
             logger.warning("polling_stops_error", user_id=self.user_id, error=str(exc))
 
+    # ── Funding-rate cache (for FundingDivergenceStrategy) ──────────────
+
+    def _strategy_needs_funding(self) -> bool:
+        """True if at least one registered strategy reads `funding_rate`."""
+        return "funding_divergence" in self.strategy_registry.strategies
+
+    async def _refresh_funding_for_pair(self, pair: str) -> None:
+        """Fetch Binance perp funding history for ``pair`` and cache it."""
+        from bot.data.funding import FundingRateClient, kraken_to_binance_perp
+        if kraken_to_binance_perp(pair) is None:
+            return  # no matching Binance perp — silently skip
+        if self._funding_client is None:
+            self._funding_client = FundingRateClient()
+        try:
+            samples = await self._funding_client.get_history(
+                pair, days=self._funding_history_days
+            )
+        except Exception as exc:
+            logger.warning(
+                "funding_refresh_error",
+                user_id=self.user_id, pair=pair, error=str(exc),
+            )
+            return
+        if not samples:
+            return
+        df_funding = FundingRateClient.samples_to_df(samples)
+        self._funding_history[pair] = df_funding
+        self._funding_last_refresh[pair] = _time_mod.time()
+        logger.info(
+            "funding_cache_refreshed",
+            user_id=self.user_id, pair=pair, samples=len(samples),
+        )
+
+    async def _funding_refresh_loop(self) -> None:
+        """Periodically refresh funding cache for every active pair."""
+        while self._running:
+            await asyncio.sleep(60)  # tick at 1 min, refresh per pair on TTL
+            self._last_loop_run["funding_refresh"] = _time_mod.time()
+            if not self._strategy_needs_funding():
+                continue
+            try:
+                pairs = set(self._active_pairs)
+                if self.autopilot and self.autopilot.active_scores:
+                    pairs.update(self.autopilot.active_scores.keys())
+                now = _time_mod.time()
+                for pair in pairs:
+                    last = self._funding_last_refresh.get(pair, 0.0)
+                    if now - last < self._funding_refresh_ttl_sec:
+                        continue
+                    await self._refresh_funding_for_pair(pair)
+            except Exception as exc:
+                logger.warning(
+                    "funding_refresh_loop_error",
+                    user_id=self.user_id, error=str(exc),
+                )
+
+    def _inject_funding_columns(self, pair: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Add `funding_rate` (forward-filled) and `funding_pct_threshold`
+        columns to the bar DataFrame using the cached funding history.
+
+        Returns the same df (mutated) if cache is fresh; original df untouched
+        if cache is empty or stale (strategy will then no-op).
+        """
+        cache = self._funding_history.get(pair)
+        if cache is None or cache.empty:
+            return df
+        last_refresh = self._funding_last_refresh.get(pair, 0.0)
+        # Treat the cache as stale after 3x the refresh TTL (90 min default).
+        if _time_mod.time() - last_refresh > self._funding_refresh_ttl_sec * 3:
+            logger.warning(
+                "funding_cache_stale", user_id=self.user_id, pair=pair,
+                age_sec=int(_time_mod.time() - last_refresh),
+            )
+            return df
+        try:
+            # Forward-fill funding (8h cadence) onto the bar index
+            combined_idx = df.index.union(cache.index)
+            ffilled = cache.reindex(combined_idx).sort_index().ffill()
+            ffilled = ffilled.reindex(df.index)
+            df = df.copy()
+            df["funding_rate"] = ffilled["funding_rate"]
+            # Constant column: the percentile threshold computed over the
+            # full cached history (independent of the bar window length).
+            rates = cache["funding_rate"].dropna()
+            if len(rates) >= 30:
+                df["funding_pct_threshold"] = float(
+                    rates.quantile(self._funding_percentile)
+                )
+        except Exception as exc:
+            logger.warning(
+                "funding_inject_error",
+                user_id=self.user_id, pair=pair, error=str(exc),
+            )
+        return df
+
     async def _bar_update_loop(self) -> None:
         import pandas as pd
         from bot.data.indicators import add_all_indicators
@@ -1282,6 +1391,11 @@ class UserBotContext:
                                 ))
                             except Exception:
                                 pass
+
+                    # Inject funding-rate columns when needed (ignored by other
+                    # strategies; only FundingDivergenceStrategy reads them).
+                    if self._strategy_needs_funding():
+                        df = self._inject_funding_columns(pair, df)
 
                     if df_d1 is not None:
                         signals = self.strategy_registry.dispatch_bar_mtf(pair, df, df_d1)
